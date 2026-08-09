@@ -11,6 +11,24 @@ class RegisterRequest extends FormRequest
         return true;
     }
 
+    protected function prepareForValidation(): void
+    {
+        if ($this->has('country')) {
+            $countryUpper = strtoupper((string) $this->input('country'));
+            $this->merge(['country' => $countryUpper]);
+
+            if (!$this->filled('country_code')) {
+                $countries = config('countries');
+                $matchedCountry = collect($countries)->firstWhere('code', $countryUpper);
+                if ($matchedCountry && !empty($matchedCountry['dial_code'])) {
+                    $this->merge([
+                        'country_code' => $matchedCountry['dial_code'],
+                    ]);
+                }
+            }
+        }
+    }
+
     public function rules(): array
     {
         return [
@@ -26,7 +44,9 @@ class RegisterRequest extends FormRequest
                     $fail('The selected country is not valid.');
                 }
             }],
-            'country_code' => 'required|string|max:10',
+            'country_code' => 'nullable|string|max:10',
+            'device_id' => 'nullable|string|max:100',
+            'metadata' => 'nullable|array',
         ];
     }
 

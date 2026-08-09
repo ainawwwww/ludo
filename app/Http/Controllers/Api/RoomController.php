@@ -152,18 +152,21 @@ class RoomController extends Controller
     /**
      * POST /api/v1/rooms/quick-match
      * Headers: Authorization: Bearer <token>
-     * 
+     *
      * Request Payload (JSON):
      * {
      *   "max_players": 4,
      *   "entry_fee": 100
      * }
-     * 
+     *
+     * This endpoint now delegates to the queue-based MatchmakingService.
+     * Clients should listen for the "match.found" WebSocket event on their
+     * private channel "user.{user_id}" after receiving a "waiting" status.
+     *
      * Success Response (200 OK):
      * {
      *   "status": "success",
-     *   "message": "Matched into room successfully",
-     *   "data": { ... }
+     *   "data": { "status": "waiting"|"matched", ... }
      * }
      */
     public function quickMatch(QuickMatchRequest $request): JsonResponse
@@ -177,57 +180,15 @@ class RoomController extends Controller
             return response()->json(['status' => 'error', 'message' => 'Insufficient coins for entry fee'], 400);
         }
 
-        // Find existing open room matching max_players and entry_fee
-        $availableRoom = Room::where('status', RoomStatus::WAITING->value)
-            ->where('type', RoomType::PUBLIC->value)
-            ->where('max_players', $maxPlayers)
-            ->where('entry_fee', $entryFee)
-            ->has('players', '<', $maxPlayers)
-            ->orderBy('id', 'asc')
-            ->first();
+        $matchmakingService = app(\App\Services\MatchmakingService::class);
+        $result = $matchmakingService->join($user, $maxPlayers, $entryFee);
 
-        if ($availableRoom) {
-            // Check if user already in room
-            if (!$availableRoom->players()->where('user_id', $user->id)->exists()) {
-                $this->assignSeatAndColor($availableRoom, $user);
-                $availableRoom->load(['creator', 'players.user']);
-                broadcast(new RoomUpdated($availableRoom->id, (new RoomResource($availableRoom))->resolve()));
-            }
-
-            return response()->json([
-                'status' => 'success',
-                'message' => 'Joined quick match room',
-                'data' => new RoomResource($availableRoom),
-            ]);
-        }
-
-        // Create new room if no matching open room exists
-        $newRoom = Room::create([
-            'room_code' => strtoupper(Str::random(6)),
-            'type' => RoomType::PUBLIC->value,
-            'max_players' => $maxPlayers,
-            'entry_fee' => $entryFee,
-            'status' => RoomStatus::WAITING->value,
-            'created_by' => $user->id,
-            'created_at' => now(),
-        ]);
-
-        RoomPlayer::create([
-            'room_id' => $newRoom->id,
-            'user_id' => $user->id,
-            'seat_position' => 1,
-            'color' => PlayerColor::RED->value,
-            'is_ready' => true,
-            'joined_at' => now(),
-        ]);
-
-        $newRoom->load(['creator', 'players.user']);
+        $httpStatus = $result['status'] === 'matched' ? 200 : 200;
 
         return response()->json([
             'status' => 'success',
-            'message' => 'Created quick match room',
-            'data' => new RoomResource($newRoom),
-        ], 201);
+            'data' => $result,
+        ], $httpStatus);
     }
 
     /**

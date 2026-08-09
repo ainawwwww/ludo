@@ -26,6 +26,7 @@ class UserResource extends JsonResource
             'diamonds' => $this->diamonds,
             'is_active' => $this->is_active,
             'is_guest' => (bool) $this->is_guest,
+            'metadata' => $this->metadata,
             'created_at' => $this->created_at?->toIso8601String(),
         ];
     }

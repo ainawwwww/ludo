@@ -93,31 +93,42 @@ class FeatureEnhancementsTest extends TestCase
         $user1 = User::factory()->create();
         $user2 = User::factory()->create();
 
-        // User 1 quick matches -> creates new room
+        // User 1 quick matches -> waits in queue (not enough players for 4-player match)
         $res1 = $this->actingAs($user1)->postJson('/api/v1/rooms/quick-match', [
             'max_players' => 4,
             'entry_fee' => 100,
         ]);
 
-        $res1->assertStatus(201);
-        $roomId = $res1->json('data.id');
+        $res1->assertStatus(200);
+        $this->assertEquals('waiting', $res1->json('data.status'));
 
-        // User 2 quick matches -> joins existing room
+        // User 2 quick matches -> still waiting (need 4 players)
         $res2 = $this->actingAs($user2)->postJson('/api/v1/rooms/quick-match', [
             'max_players' => 4,
             'entry_fee' => 100,
         ]);
 
         $res2->assertStatus(200);
-        $this->assertEquals($roomId, $res2->json('data.id'));
-        $this->assertCount(2, $res2->json('data.players'));
+        $this->assertEquals('waiting', $res2->json('data.status'));
 
-        // Check seat & color assignment
-        $players = $res2->json('data.players');
-        $this->assertEquals(1, $players[0]['seat_position']);
-        $this->assertEquals('red', $players[0]['color']);
-        $this->assertEquals(2, $players[1]['seat_position']);
-        $this->assertEquals('green', $players[1]['color']);
+        // Now test 2-player quick match
+        $user3 = User::factory()->create();
+        $user4 = User::factory()->create();
+
+        $res3 = $this->actingAs($user3)->postJson('/api/v1/rooms/quick-match', [
+            'max_players' => 2,
+            'entry_fee' => 100,
+        ]);
+        $res3->assertStatus(200);
+        $this->assertEquals('waiting', $res3->json('data.status'));
+
+        $res4 = $this->actingAs($user4)->postJson('/api/v1/rooms/quick-match', [
+            'max_players' => 2,
+            'entry_fee' => 100,
+        ]);
+        $res4->assertStatus(200);
+        $this->assertEquals('matched', $res4->json('data.status'));
+        $this->assertCount(2, $res4->json('data.players'));
     }
 
     public function test_leaderboard_global_country_and_friends(): void
@@ -325,5 +336,68 @@ class FeatureEnhancementsTest extends TestCase
                 'status' => 'error',
                 'message' => 'Email is already linked to another account',
             ]);
+    }
+
+    public function test_user_registration_auto_infers_country_code_when_omitted(): void
+    {
+        $response = $this->postJson('/api/v1/auth/register', [
+            'username' => 'dynamo_user_1',
+            'email' => 'dynamo1@example.com',
+            'password' => 'secret123',
+            'country' => 'pk', // Lowercase ISO code without country_code parameter
+        ]);
+
+        $response->assertStatus(201)
+            ->assertJsonPath('data.user.country', 'PK')
+            ->assertJsonPath('data.user.country_code', '+92');
+
+        $this->assertDatabaseHas('users', [
+            'username' => 'dynamo_user_1',
+            'country' => 'PK',
+            'country_code' => '+92',
+        ]);
+    }
+
+    public function test_user_registration_accepts_device_id_and_dynamic_metadata(): void
+    {
+        $response = $this->postJson('/api/v1/auth/register', [
+            'username' => 'meta_user_99',
+            'email' => 'meta99@example.com',
+            'password' => 'secret123',
+            'country' => 'US',
+            'device_id' => 'DEV_META_555',
+            'metadata' => [
+                'app_version' => '2.4.1',
+                'platform' => 'ios',
+                'referral_code' => 'FRIEND2026',
+            ],
+        ]);
+
+        $response->assertStatus(201)
+            ->assertJsonPath('data.user.country_code', '+1')
+            ->assertJsonPath('data.user.device_id', 'DEV_META_555')
+            ->assertJsonPath('data.user.metadata.app_version', '2.4.1')
+            ->assertJsonPath('data.user.metadata.platform', 'ios')
+            ->assertJsonPath('data.user.metadata.referral_code', 'FRIEND2026');
+
+        $this->assertDatabaseHas('users', [
+            'username' => 'meta_user_99',
+            'device_id' => 'DEV_META_555',
+        ]);
+    }
+
+    public function test_user_registration_with_explicit_country_code(): void
+    {
+        $response = $this->postJson('/api/v1/auth/register', [
+            'username' => 'explicit_user',
+            'email' => 'explicit@example.com',
+            'password' => 'secret123',
+            'country' => 'GB',
+            'country_code' => '+44',
+        ]);
+
+        $response->assertStatus(201)
+            ->assertJsonPath('data.user.country', 'GB')
+            ->assertJsonPath('data.user.country_code', '+44');
     }
 }

@@ -3,9 +3,13 @@
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\ChatController;
 use App\Http\Controllers\Api\CountryController;
+use App\Http\Controllers\Api\DirectMessageController;
 use App\Http\Controllers\Api\FriendController;
 use App\Http\Controllers\Api\GameController;
+use App\Http\Controllers\Api\HomeController;
 use App\Http\Controllers\Api\LeaderboardController;
+use App\Http\Controllers\Api\MatchmakingController;
+use App\Http\Controllers\Api\ProfileController;
 use App\Http\Controllers\Api\RoomController;
 use App\Http\Controllers\Api\StoreController;
 use App\Http\Controllers\Api\WalletController;
@@ -37,6 +41,13 @@ Route::prefix('v1')->group(function () {
         Route::get('/auth/me', [AuthController::class, 'me']);
         Route::post('/auth/logout', [AuthController::class, 'logout']);
 
+        // Home Screen
+        Route::get('/home', [HomeController::class, 'index']);
+
+        // Profile Module
+        Route::get('/profile', [ProfileController::class, 'show']);
+        Route::put('/profile', [ProfileController::class, 'update']);
+
         // Wallet Module
         Route::get('/wallet/balance', [WalletController::class, 'getBalance']);
         Route::get('/wallet/transactions', [WalletController::class, 'getTransactions']);
@@ -48,6 +59,11 @@ Route::prefix('v1')->group(function () {
         Route::post('/rooms/quick-match', [RoomController::class, 'quickMatch']);
         Route::get('/rooms/{id}', [RoomController::class, 'show']);
         Route::post('/rooms/join', [RoomController::class, 'join']);
+
+        // Queue-Based Matchmaking Module
+        Route::post('/matchmaking/join', [MatchmakingController::class, 'join']);
+        Route::post('/matchmaking/leave', [MatchmakingController::class, 'leave']);
+        Route::get('/matchmaking/status', [MatchmakingController::class, 'status']);
 
         // Real-time Game Engine Module
         Route::post('/game/start', [GameController::class, 'start']);
@@ -67,6 +83,12 @@ Route::prefix('v1')->group(function () {
         Route::get('/friends', [FriendController::class, 'index']);
         Route::post('/friends/request', [FriendController::class, 'sendRequest']);
         Route::post('/friends/{id}/respond', [FriendController::class, 'respondRequest']);
+
+        // Direct Messaging & Voice Notes Module
+        Route::get('/friends/conversations', [DirectMessageController::class, 'getConversations']);
+        Route::post('/friends/{friend_id}/message', [DirectMessageController::class, 'sendMessage']);
+        Route::get('/friends/{friend_id}/messages', [DirectMessageController::class, 'getMessages']);
+        Route::delete('/friends/messages/{message_id}', [DirectMessageController::class, 'deleteMessage']);
 
         // Room Live Chat Module
         Route::post('/chat/message', [ChatController::class, 'sendMessage']);

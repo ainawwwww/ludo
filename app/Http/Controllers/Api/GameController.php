@@ -300,6 +300,8 @@ class GameController extends Controller
                     'status' => GameStatus::COMPLETED->value,
                     'ended_at' => now(),
                 ]);
+
+                app(\App\Services\LeagueService::class)->awardLeaguePoints($game);
             }
 
             Room::where('id', $request->room_id)->update(['status' => RoomStatus::FINISHED->value]);

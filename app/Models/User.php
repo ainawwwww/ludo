@@ -31,6 +31,14 @@ class User extends Authenticatable
         'xp',
         'is_active',
         'is_guest',
+        'metadata',
+        'gender',
+        'dob',
+        'bio',
+        'name_change_count',
+        'name_change_reset_at',
+        'league_points',
+        'rank',
     ];
 
     protected $hidden = [
@@ -45,6 +53,12 @@ class User extends Authenticatable
             'xp' => 'integer',
             'is_active' => 'boolean',
             'is_guest' => 'boolean',
+            'metadata' => 'array',
+            'dob' => 'date',
+            'name_change_count' => 'integer',
+            'name_change_reset_at' => 'datetime',
+            'league_points' => 'integer',
+            'rank' => 'integer',
         ];
     }
 
@@ -86,5 +100,57 @@ class User extends Authenticatable
     public function friends(): HasMany
     {
         return $this->hasMany(Friend::class, 'user_id');
+    }
+
+    /**
+     * Get all room_players records for this user (used to compute game stats).
+     */
+    public function roomPlayers(): HasMany
+    {
+        return $this->hasMany(RoomPlayer::class, 'user_id');
+    }
+
+    /**
+     * Compute total games played by counting distinct rooms with completed games.
+     */
+    public function getTotalGamesPlayedAttribute(): int
+    {
+        return RoomPlayer::where('user_id', $this->id)
+            ->whereHas('room', function ($query) {
+                $query->whereHas('game', function ($q) {
+                    $q->where('status', \App\Enums\GameStatus::COMPLETED->value);
+                });
+            })
+            ->count();
+    }
+
+    /**
+     * Compute total wins from completed games.
+     */
+    public function getTotalWinsAttribute(): int
+    {
+        return Game::where('winner_id', $this->id)
+            ->where('status', \App\Enums\GameStatus::COMPLETED->value)
+            ->count();
+    }
+
+    /**
+     * Compute total losses from completed games.
+     */
+    public function getTotalLossesAttribute(): int
+    {
+        return $this->total_games_played - $this->total_wins;
+    }
+
+    /**
+     * Compute win rate as a percentage.
+     */
+    public function getWinRateAttribute(): float
+    {
+        $totalGames = $this->total_games_played;
+        if ($totalGames === 0) {
+            return 0.0;
+        }
+        return round(($this->total_wins / $totalGames) * 100, 2);
     }
 }

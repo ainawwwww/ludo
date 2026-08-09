@@ -27,8 +27,13 @@ class AuthController extends Controller
      *   "phone": "3001234567",
      *   "password": "secretpassword",
      *   "country": "PK",
-     *   "country_code": "+92",
-     *   "avatar_url": "https://example.com/avatar1.png"
+     *   "country_code": "+92",            // Optional: Auto-inferred from country ISO code if omitted
+     *   "avatar_url": "https://example.com/avatar1.png",
+     *   "device_id": "DEV_ANDROID_9988",  // Optional: Device identifier
+     *   "metadata": {                     // Optional: Custom dynamic client metadata
+     *     "app_version": "1.2.0",
+     *     "platform": "android"
+     *   }
      * }
      * 
      * Success Response (201 Created):
@@ -43,6 +48,8 @@ class AuthController extends Controller
      *       "email": "user@example.com",
      *       "country": "PK",
      *       "country_code": "+92",
+     *       "device_id": "DEV_ANDROID_9988",
+     *       "metadata": { "app_version": "1.2.0", "platform": "android" },
      *       "coins": 1000,
      *       "diamonds": 10,
      *       "level": 1,

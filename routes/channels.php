@@ -24,3 +24,8 @@ Broadcast::channel('room.{roomId}', function ($user, $roomId) {
         ->where('user_id', $user->id)
         ->exists();
 });
+
+// Private user WebSocket channel authorization (for MatchFound events)
+Broadcast::channel('user.{id}', function ($user, $id) {
+    return (int) $user->id === (int) $id;
+});

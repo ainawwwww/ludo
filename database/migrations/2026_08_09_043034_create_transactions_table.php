@@ -11,15 +11,17 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('transactions', function (Blueprint $table) {
-            $table->bigIncrements('id');
-            $table->unsignedBigInteger('user_id')->index();
-            $table->enum('type', ['win', 'loss', 'purchase', 'topup', 'gift']);
-            $table->enum('currency_type', ['coins', 'diamonds']);
-            $table->bigInteger('amount');
-            $table->string('reference_id', 100)->nullable();
-            $table->timestamp('created_at')->nullable()->useCurrent();
-        });
+        if (!Schema::hasTable('transactions')) {
+            Schema::create('transactions', function (Blueprint $table) {
+                $table->bigIncrements('id');
+                $table->unsignedBigInteger('user_id')->index();
+                $table->enum('type', ['win', 'loss', 'purchase', 'topup', 'gift']);
+                $table->enum('currency_type', ['coins', 'diamonds']);
+                $table->bigInteger('amount');
+                $table->string('reference_id', 100)->nullable();
+                $table->timestamp('created_at')->nullable()->useCurrent();
+            });
+        }
     }
 
     /**
