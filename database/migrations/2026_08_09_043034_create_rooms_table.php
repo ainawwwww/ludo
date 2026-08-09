@@ -18,7 +18,7 @@ return new class extends Migration
             $table->tinyInteger('max_players')->nullable()->default(4);
             $table->bigInteger('entry_fee')->nullable()->default(0);
             $table->string('status')->nullable()->default('waiting');
-            $table->unsignedBigInteger('created_by')->index('created_by');
+            $table->unsignedBigInteger('created_by')->index();
             $table->timestamp('created_at')->nullable()->useCurrent();
             $table->timestamp('updated_at')->useCurrentOnUpdate()->nullable()->useCurrent();
         });

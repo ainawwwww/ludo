@@ -18,6 +18,7 @@ return new class extends Migration
             $table->string('email', 100)->nullable()->unique('email');
             $table->string('phone', 20)->nullable()->unique('phone');
             $table->string('password')->nullable();
+            $table->rememberToken();
             $table->string('avatar_url')->nullable();
             $table->string('country', 50)->nullable();
             $table->integer('level')->nullable()->default(1);

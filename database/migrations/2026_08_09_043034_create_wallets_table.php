@@ -13,7 +13,7 @@ return new class extends Migration
     {
         Schema::create('wallets', function (Blueprint $table) {
             $table->bigIncrements('id');
-            $table->unsignedBigInteger('user_id')->index('user_id');
+            $table->unsignedBigInteger('user_id')->index();
             $table->bigInteger('coins_balance')->nullable()->default(0);
             $table->bigInteger('diamonds_balance')->nullable()->default(0);
             $table->timestamp('created_at')->nullable()->useCurrent();

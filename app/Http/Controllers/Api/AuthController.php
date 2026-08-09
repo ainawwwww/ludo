@@ -3,14 +3,17 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Http\Requests\GoogleLoginRequest;
 use App\Http\Requests\LoginRequest;
 use App\Http\Requests\RegisterRequest;
 use App\Http\Resources\UserResource;
 use App\Models\User;
 use App\Models\Wallet;
+use App\Services\Auth\GoogleTokenVerifier;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Str;
 
 class AuthController extends Controller
 {
@@ -21,8 +24,10 @@ class AuthController extends Controller
      * {
      *   "username": "ludo_king",
      *   "email": "user@example.com",
+     *   "phone": "3001234567",
      *   "password": "secretpassword",
      *   "country": "PK",
+     *   "country_code": "+92",
      *   "avatar_url": "https://example.com/avatar1.png"
      * }
      * 
@@ -36,6 +41,8 @@ class AuthController extends Controller
      *       "id": 1,
      *       "username": "ludo_king",
      *       "email": "user@example.com",
+     *       "country": "PK",
+     *       "country_code": "+92",
      *       "coins": 1000,
      *       "diamonds": 10,
      *       "level": 1,
@@ -241,6 +248,167 @@ class AuthController extends Controller
         return response()->json([
             'status' => 'success',
             'message' => 'Guest account created successfully',
+            'data' => [
+                'token' => $token,
+                'user' => new UserResource($user),
+            ]
+        ], 201);
+    }
+
+    /**
+     * POST /api/v1/auth/google
+     * 
+     * Request Payload (JSON):
+     * {
+     *   "id_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6..."
+     * }
+     * 
+     * Success Response - Existing User Logged In / Account Linked (200 OK):
+     * {
+     *   "status": "success",
+     *   "message": "Logged in successfully",
+     *   "data": {
+     *     "token": "5|sanctum_token_string_here",
+     *     "user": {
+     *       "id": 1,
+     *       "username": "john_doe",
+     *       "email": "john@example.com",
+     *       "google_id": "109876543210987654321",
+     *       "auth_provider": "google",
+     *       "avatar_url": "https://lh3.googleusercontent.com/a/...",
+     *       "coins": 1000,
+     *       "diamonds": 10,
+     *       "is_guest": false
+     *     }
+     *   }
+     * }
+     * 
+     * Success Response - New User Created (201 Created):
+     * {
+     *   "status": "success",
+     *   "message": "User registered and logged in with Google",
+     *   "data": {
+     *     "token": "6|sanctum_token_string_here",
+     *     "user": { ... }
+     *   }
+     * }
+     * 
+     * Error Response - Invalid or Expired Token (401 Unauthorized):
+     * {
+     *   "status": "error",
+     *   "message": "Invalid Google token"
+     * }
+     * 
+     * Error Response - Email Linked to Another Account (409 Conflict):
+     * {
+     *   "status": "error",
+     *   "message": "Email is already linked to another account"
+     * }
+     */
+    public function google(GoogleLoginRequest $request, GoogleTokenVerifier $verifier): JsonResponse
+    {
+        $idToken = $request->validated('id_token');
+
+        $payload = $verifier->verify($idToken);
+
+        if (!$payload || empty($payload['sub'])) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Invalid Google token',
+            ], 401);
+        }
+
+        $googleId = $payload['sub'];
+        $email = $payload['email'] ?? null;
+        $name = $payload['name'] ?? null;
+        $avatarUrl = $payload['picture'] ?? null;
+
+        // 1. Check if user already exists with this google_id
+        $user = User::where('google_id', $googleId)->first();
+
+        if ($user) {
+            $token = $user->createToken('auth_token')->plainTextToken;
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Logged in successfully',
+                'data' => [
+                    'token' => $token,
+                    'user' => new UserResource($user),
+                ]
+            ], 200);
+        }
+
+        // 2. Check if user exists with this email (e.g. created via guest or email auth)
+        if (!empty($email)) {
+            $existingUser = User::where('email', $email)->first();
+
+            if ($existingUser) {
+                // If existing email is already linked to a DIFFERENT google_id -> 409 Conflict
+                if (!empty($existingUser->google_id) && $existingUser->google_id !== $googleId) {
+                    return response()->json([
+                        'status' => 'error',
+                        'message' => 'Email is already linked to another account',
+                    ], 409);
+                }
+
+                // Link account to Google
+                $existingUser->google_id = $googleId;
+                $existingUser->auth_provider = 'google';
+                $existingUser->is_guest = false;
+                if (empty($existingUser->avatar_url) && !empty($avatarUrl)) {
+                    $existingUser->avatar_url = $avatarUrl;
+                }
+                $existingUser->save();
+
+                $token = $existingUser->createToken('auth_token')->plainTextToken;
+
+                return response()->json([
+                    'status' => 'success',
+                    'message' => 'Logged in successfully',
+                    'data' => [
+                        'token' => $token,
+                        'user' => new UserResource($existingUser),
+                    ]
+                ], 200);
+            }
+        }
+
+        // 3. Create new user if no match found
+        $baseUsername = Str::slug($name ?: ($email ? explode('@', $email)[0] : 'user'), '_');
+        if (empty($baseUsername)) {
+            $baseUsername = 'user';
+        }
+
+        $username = $baseUsername;
+        while (User::where('username', $username)->exists()) {
+            $username = $baseUsername . random_int(100, 9999);
+        }
+
+        $user = User::create([
+            'username' => $username,
+            'email' => $email,
+            'google_id' => $googleId,
+            'auth_provider' => 'google',
+            'avatar_url' => $avatarUrl,
+            'is_guest' => false,
+            'is_active' => true,
+            'level' => 1,
+            'xp' => 0,
+        ]);
+
+        // Auto-create wallet for user with 500 starting coins
+        Wallet::create([
+            'user_id' => $user->id,
+            'coins_balance' => 500,
+            'diamonds_balance' => 10,
+        ]);
+
+        $token = $user->createToken('auth_token')->plainTextToken;
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'User registered and logged in with Google',
             'data' => [
                 'token' => $token,
                 'user' => new UserResource($user),

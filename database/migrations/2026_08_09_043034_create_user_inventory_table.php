@@ -14,7 +14,7 @@ return new class extends Migration
         Schema::create('user_inventory', function (Blueprint $table) {
             $table->bigIncrements('id');
             $table->unsignedBigInteger('user_id');
-            $table->unsignedBigInteger('item_id')->index('item_id');
+            $table->unsignedBigInteger('item_id')->index();
             $table->boolean('is_equipped')->nullable()->default(false);
             $table->timestamp('purchased_at')->nullable()->useCurrent();
 

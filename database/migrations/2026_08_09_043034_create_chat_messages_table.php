@@ -13,8 +13,8 @@ return new class extends Migration
     {
         Schema::create('chat_messages', function (Blueprint $table) {
             $table->bigIncrements('id');
-            $table->unsignedBigInteger('room_id')->index('room_id');
-            $table->unsignedBigInteger('user_id')->index('user_id');
+            $table->unsignedBigInteger('room_id')->index();
+            $table->unsignedBigInteger('user_id')->index();
             $table->text('message');
             $table->timestamp('created_at')->nullable()->useCurrent();
         });

@@ -13,7 +13,7 @@ return new class extends Migration
     {
         Schema::create('transactions', function (Blueprint $table) {
             $table->bigIncrements('id');
-            $table->unsignedBigInteger('user_id')->index('user_id');
+            $table->unsignedBigInteger('user_id')->index();
             $table->enum('type', ['win', 'loss', 'purchase', 'topup', 'gift']);
             $table->enum('currency_type', ['coins', 'diamonds']);
             $table->bigInteger('amount');

@@ -14,7 +14,7 @@ return new class extends Migration
         Schema::create('friends', function (Blueprint $table) {
             $table->bigIncrements('id');
             $table->unsignedBigInteger('user_id');
-            $table->unsignedBigInteger('friend_id')->index('friend_id');
+            $table->unsignedBigInteger('friend_id')->index();
             $table->enum('status', ['pending', 'accepted', 'blocked'])->nullable()->default('pending');
             $table->timestamp('created_at')->nullable()->useCurrent();
             $table->timestamp('updated_at')->useCurrentOnUpdate()->nullable()->useCurrent();

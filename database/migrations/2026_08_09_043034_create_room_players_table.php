@@ -14,7 +14,7 @@ return new class extends Migration
         Schema::create('room_players', function (Blueprint $table) {
             $table->bigIncrements('id');
             $table->unsignedBigInteger('room_id');
-            $table->unsignedBigInteger('user_id')->index('user_id');
+            $table->unsignedBigInteger('user_id')->index();
             $table->tinyInteger('seat_position');
             $table->enum('color', ['red', 'green', 'yellow', 'blue']);
             $table->boolean('is_ready')->nullable()->default(false);

@@ -16,6 +16,7 @@ use App\Models\RoomPlayer;
 use App\Models\User;
 use App\Models\Wallet;
 
+use App\Services\Auth\GoogleTokenVerifier;
 use App\Services\GameEngine\BoardService;
 use App\Services\GameEngine\DiceService;
 use App\Services\GameEngine\MoveValidator;
@@ -182,5 +183,147 @@ class FeatureEnhancementsTest extends TestCase
         $newState = $stateStore->getState(999);
         $this->assertNotNull($newState);
         $this->assertNotEquals($initialTimestamp, $newState['last_action_at']);
+    }
+
+    public function test_google_login_creates_new_user_and_wallet(): void
+    {
+        $mock = $this->mock(GoogleTokenVerifier::class);
+        $mock->shouldReceive('verify')
+            ->with('valid_token_123')
+            ->andReturn([
+                'sub' => 'google_sub_1001',
+                'email' => 'newuser@example.com',
+                'name' => 'New User',
+                'picture' => 'https://example.com/pic.png',
+            ]);
+
+        $response = $this->postJson('/api/v1/auth/google', [
+            'id_token' => 'valid_token_123',
+        ]);
+
+        $response->assertStatus(201)
+            ->assertJsonStructure([
+                'status',
+                'message',
+                'data' => [
+                    'token',
+                    'user' => ['id', 'username', 'email', 'google_id', 'auth_provider', 'coins', 'diamonds']
+                ]
+            ]);
+
+        $this->assertDatabaseHas('users', [
+            'email' => 'newuser@example.com',
+            'google_id' => 'google_sub_1001',
+            'auth_provider' => 'google',
+            'is_guest' => false,
+        ]);
+    }
+
+    public function test_google_login_existing_google_id_logs_in_without_duplication(): void
+    {
+        $existing = User::factory()->create([
+            'username' => 'existing_google_user',
+            'email' => 'existing@example.com',
+            'google_id' => 'google_sub_2002',
+            'auth_provider' => 'google',
+        ]);
+
+        $mock = $this->mock(GoogleTokenVerifier::class);
+        $mock->shouldReceive('verify')
+            ->with('valid_token_2002')
+            ->andReturn([
+                'sub' => 'google_sub_2002',
+                'email' => 'existing@example.com',
+                'name' => 'Existing Google User',
+            ]);
+
+        $response = $this->postJson('/api/v1/auth/google', [
+            'id_token' => 'valid_token_2002',
+        ]);
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.user.id', $existing->id);
+
+        $this->assertEquals(1, User::where('google_id', 'google_sub_2002')->count());
+    }
+
+    public function test_google_login_existing_email_links_google_id(): void
+    {
+        $existingEmailUser = User::factory()->create([
+            'username' => 'email_user',
+            'email' => 'linkme@example.com',
+            'google_id' => null,
+            'auth_provider' => 'email',
+        ]);
+
+        $mock = $this->mock(GoogleTokenVerifier::class);
+        $mock->shouldReceive('verify')
+            ->with('valid_token_link')
+            ->andReturn([
+                'sub' => 'google_sub_3003',
+                'email' => 'linkme@example.com',
+                'name' => 'Link Me',
+            ]);
+
+        $response = $this->postJson('/api/v1/auth/google', [
+            'id_token' => 'valid_token_link',
+        ]);
+
+        $response->assertStatus(200)
+            ->assertJsonPath('data.user.id', $existingEmailUser->id)
+            ->assertJsonPath('data.user.google_id', 'google_sub_3003');
+
+        $this->assertDatabaseHas('users', [
+            'id' => $existingEmailUser->id,
+            'google_id' => 'google_sub_3003',
+            'auth_provider' => 'google',
+        ]);
+    }
+
+    public function test_google_login_invalid_token_returns_401(): void
+    {
+        $mock = $this->mock(GoogleTokenVerifier::class);
+        $mock->shouldReceive('verify')
+            ->with('bad_token')
+            ->andReturn(null);
+
+        $response = $this->postJson('/api/v1/auth/google', [
+            'id_token' => 'bad_token',
+        ]);
+
+        $response->assertStatus(401)
+            ->assertJson([
+                'status' => 'error',
+                'message' => 'Invalid Google token',
+            ]);
+    }
+
+    public function test_google_login_conflicting_google_id_returns_409(): void
+    {
+        User::factory()->create([
+            'username' => 'other_user',
+            'email' => 'conflict@example.com',
+            'google_id' => 'different_google_id_9999',
+            'auth_provider' => 'google',
+        ]);
+
+        $mock = $this->mock(GoogleTokenVerifier::class);
+        $mock->shouldReceive('verify')
+            ->with('valid_token_conflict')
+            ->andReturn([
+                'sub' => 'new_google_id_8888',
+                'email' => 'conflict@example.com',
+                'name' => 'Conflict User',
+            ]);
+
+        $response = $this->postJson('/api/v1/auth/google', [
+            'id_token' => 'valid_token_conflict',
+        ]);
+
+        $response->assertStatus(409)
+            ->assertJson([
+                'status' => 'error',
+                'message' => 'Email is already linked to another account',
+            ]);
     }
 }

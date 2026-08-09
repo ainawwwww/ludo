@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\ChatController;
+use App\Http\Controllers\Api\CountryController;
 use App\Http\Controllers\Api\FriendController;
 use App\Http\Controllers\Api\GameController;
 use App\Http\Controllers\Api\LeaderboardController;
@@ -25,6 +26,10 @@ Route::prefix('v1')->group(function () {
     Route::post('/auth/register', [AuthController::class, 'register']);
     Route::post('/auth/login', [AuthController::class, 'login']);
     Route::post('/auth/guest', [AuthController::class, 'guest']);
+    Route::post('/auth/google', [AuthController::class, 'google']);
+
+    // Countries Public Endpoint (needed on registration screen)
+    Route::get('/countries', [CountryController::class, 'index']);
 
     // Protected API Endpoints (Sanctum Guard)
     Route::middleware('auth:sanctum')->group(function () {

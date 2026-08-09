@@ -13,8 +13,8 @@ return new class extends Migration
     {
         Schema::create('game_moves', function (Blueprint $table) {
             $table->bigIncrements('id');
-            $table->unsignedBigInteger('game_id')->index('game_id');
-            $table->unsignedBigInteger('user_id')->index('user_id');
+            $table->unsignedBigInteger('game_id')->index();
+            $table->unsignedBigInteger('user_id')->index();
             $table->tinyInteger('token_id');
             $table->tinyInteger('dice_value');
             $table->integer('from_pos')->nullable();
