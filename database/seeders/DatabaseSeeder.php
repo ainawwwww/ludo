@@ -23,5 +23,6 @@ class DatabaseSeeder extends Seeder
         ]);
 
         $this->call(LeagueSeeder::class);
+        $this->call(TournamentSeeder::class);
     }
 }

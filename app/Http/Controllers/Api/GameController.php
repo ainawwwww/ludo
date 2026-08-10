@@ -302,6 +302,7 @@ class GameController extends Controller
                 ]);
 
                 app(\App\Services\LeagueService::class)->awardLeaguePoints($game);
+                app(\App\Services\TournamentService::class)->processMatchResult($request->room_id, $user->id);
             }
 
             Room::where('id', $request->room_id)->update(['status' => RoomStatus::FINISHED->value]);
