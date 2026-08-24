@@ -12,6 +12,7 @@ use App\Http\Controllers\Api\MatchmakingController;
 use App\Http\Controllers\Api\ProfileController;
 use App\Http\Controllers\Api\RoomController;
 use App\Http\Controllers\Api\StoreController;
+use App\Http\Controllers\Api\TournamentController;
 use App\Http\Controllers\Api\WalletController;
 use Illuminate\Support\Facades\Route;
 
@@ -64,6 +65,14 @@ Route::prefix('v1')->group(function () {
         Route::post('/matchmaking/join', [MatchmakingController::class, 'join']);
         Route::post('/matchmaking/leave', [MatchmakingController::class, 'leave']);
         Route::get('/matchmaking/status', [MatchmakingController::class, 'status']);
+
+        // Tournament Ladder System Module
+        Route::get('/tournaments', [TournamentController::class, 'index']);
+        Route::get('/tournaments/{id}', [TournamentController::class, 'show']);
+        Route::post('/tournaments/{id}/join', [TournamentController::class, 'join']);
+        Route::post('/tournaments/{id}/continue', [TournamentController::class, 'continueMatch']);
+        Route::post('/tournaments/{id}/leave', [TournamentController::class, 'leave']);
+        Route::get('/tournaments/{id}/progress', [TournamentController::class, 'progress']);
 
         // Real-time Game Engine Module
         Route::post('/game/start', [GameController::class, 'start']);
