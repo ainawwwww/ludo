@@ -183,12 +183,18 @@ class RoomController extends Controller
         $matchmakingService = app(\App\Services\MatchmakingService::class);
         $result = $matchmakingService->join($user, $maxPlayers, $entryFee);
 
-        $httpStatus = $result['status'] === 'matched' ? 200 : 200;
+        if (isset($result['message']) && $result['message'] === 'Already in matchmaking queue') {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'Already in matchmaking queue',
+                'data' => $result,
+            ], 409);
+        }
 
         return response()->json([
             'status' => 'success',
             'data' => $result,
-        ], $httpStatus);
+        ], 200);
     }
 
     /**
