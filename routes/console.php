@@ -9,3 +9,4 @@ Artisan::command('inspire', function () {
 })->purpose('Display an inspiring quote');
 
 Schedule::command('leaderboard:recalculate-ranks')->everyTenMinutes();
+Schedule::command('league:process-season-end')->hourly();

@@ -34,7 +34,8 @@ class HomeResource extends JsonResource
 {
     public function toArray(Request $request): array
     {
-        $league = League::getLeagueForPoints($this->league_points ?? 0);
+        $isUnlocked = ((int) ($this->level ?? 1)) >= 4;
+        $league = $isUnlocked ? League::getLeagueForPoints($this->league_points ?? 0) : null;
 
         return [
             'username' => $this->username,
@@ -45,6 +46,8 @@ class HomeResource extends JsonResource
                 'name' => $league->name,
                 'icon_url' => $league->icon_url,
             ] : null,
+            'is_league_locked' => !$isUnlocked,
+            'league_unlock_level' => 4,
             'global_rank' => $this->rank,
             'avatar_url' => $this->avatar_url,
         ];

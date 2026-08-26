@@ -62,6 +62,32 @@ class User extends Authenticatable
         ];
     }
 
+    protected static function booted(): void
+    {
+        static::updated(function (User $user) {
+            if ($user->wasChanged('level')) {
+                $oldLevel = (int) $user->getOriginal('level');
+                $newLevel = (int) $user->level;
+                if ($oldLevel < 4 && $newLevel >= 4) {
+                    app(\App\Services\League\LeagueSeasonService::class)->enrollUserIfEligible($user);
+                }
+            }
+        });
+    }
+
+    /**
+     * Add XP to user and update level.
+     */
+    public function addXp(int $amount): void
+    {
+        $this->xp = (int) ($this->xp ?? 0) + $amount;
+        $newLevel = max(1, (int) floor($this->xp / 100) + 1);
+        if ($newLevel !== (int) $this->level) {
+            $this->level = $newLevel;
+        }
+        $this->save();
+    }
+
     // Accessors for coins and diamonds from associated wallet
     public function getCoinsAttribute(): int
     {

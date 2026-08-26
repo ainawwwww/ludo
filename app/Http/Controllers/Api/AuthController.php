@@ -201,15 +201,71 @@ class AuthController extends Controller
      *   "data": { ... }
      * }
      */
+    public static function generateNextGuestUsername(): string
+    {
+        $guestUsernames = User::where('username', 'LIKE', 'Guest%')->pluck('username');
+
+        $maxNumber = -1;
+        foreach ($guestUsernames as $name) {
+            $suffix = substr($name, 5);
+            if (ctype_digit($suffix)) {
+                $num = (int) $suffix;
+                if ($num > $maxNumber) {
+                    $maxNumber = $num;
+                }
+            }
+        }
+
+        $nextNumber = $maxNumber + 1;
+        $candidate = 'Guest' . str_pad((string) $nextNumber, 4, '0', STR_PAD_LEFT);
+
+        while (User::where('username', $candidate)->exists()) {
+            $nextNumber++;
+            $candidate = 'Guest' . str_pad((string) $nextNumber, 4, '0', STR_PAD_LEFT);
+        }
+
+        return $candidate;
+    }
+
+    /**
+     * POST /api/v1/auth/guest
+     * 
+     * Request Payload (JSON, optional):
+     * {
+     *   "device_id": "DEVICE_ABC_123"
+     * }
+     * 
+     * Success Response - Existing Device Resumed (200 OK):
+     * {
+     *   "status": "success",
+     *   "message": "Guest session resumed",
+     *   "data": {
+     *     "token": "4|sanctum_token_string_here",
+     *     "user": {
+     *       "id": 5,
+     *       "device_id": "DEVICE_ABC_123",
+     *       "username": "Guest0000",
+     *       "is_guest": true,
+     *       "coins": 500,
+     *       "diamonds": 10
+     *     }
+     *   }
+     * }
+     * 
+     * Success Response - New Guest Created (201 Created):
+     * {
+     *   "status": "success",
+     *   "message": "Guest account created successfully",
+     *   "data": { ... }
+     * }
+     */
     public function guest(\App\Http\Requests\GuestLoginRequest $request): JsonResponse
     {
         $deviceId = $request->input('device_id');
 
-        // Case 1: Device ID provided and guest user exists -> Resume existing session
+        // Case 1: Device ID provided and user exists with this device_id -> Resume existing session
         if (!empty($deviceId)) {
-            $existingUser = User::where('device_id', $deviceId)
-                ->where('is_guest', true)
-                ->first();
+            $existingUser = User::where('device_id', $deviceId)->first();
 
             if ($existingUser) {
                 // Revoke old tokens if any
@@ -227,10 +283,8 @@ class AuthController extends Controller
             }
         }
 
-        // Case 2 & 3: New device or omitted device_id -> Create new guest user
-        do {
-            $username = 'Guest' . random_int(1000, 9999);
-        } while (User::where('username', $username)->exists());
+        // Case 2 & 3: New device or omitted device_id -> Create next sequential guest user (Guest0000, Guest0001, etc.)
+        $username = self::generateNextGuestUsername();
 
         $user = User::create([
             'device_id' => $deviceId ?: null,

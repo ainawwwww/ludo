@@ -45,9 +45,24 @@ class FeatureEnhancementsTest extends TestCase
             ]);
 
         $username = $response->json('data.user.username');
-        $this->assertStringStartsWith('Guest', $username);
+        $this->assertEquals('Guest0000', $username);
         $this->assertTrue($response->json('data.user.is_guest'));
         $this->assertEquals(500, $response->json('data.user.coins'));
+    }
+
+    public function test_guest_usernames_are_generated_sequentially(): void
+    {
+        $res1 = $this->postJson('/api/v1/auth/guest', ['device_id' => 'DEV_1']);
+        $res1->assertStatus(201);
+        $this->assertEquals('Guest0000', $res1->json('data.user.username'));
+
+        $res2 = $this->postJson('/api/v1/auth/guest', ['device_id' => 'DEV_2']);
+        $res2->assertStatus(201);
+        $this->assertEquals('Guest0001', $res2->json('data.user.username'));
+
+        $res3 = $this->postJson('/api/v1/auth/guest', ['device_id' => 'DEV_3']);
+        $res3->assertStatus(201);
+        $this->assertEquals('Guest0002', $res3->json('data.user.username'));
     }
 
     public function test_guest_login_same_device_id_returns_same_user(): void

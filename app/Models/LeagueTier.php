@@ -4,8 +4,9 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
-class League extends Model
+class LeagueTier extends Model
 {
     use HasFactory;
 
@@ -28,7 +29,15 @@ class League extends Model
         ];
     }
 
-    public static function getLeagueForPoints(int $points): ?self
+    public function divisions(): HasMany
+    {
+        return $this->hasMany(LeagueDivision::class, 'league_tier_id');
+    }
+
+    /**
+     * Get the league tier for the given point total.
+     */
+    public static function getTierForPoints(int $points): ?self
     {
         return static::where('min_points', '<=', $points)
             ->where(function ($query) use ($points) {
@@ -39,10 +48,23 @@ class League extends Model
             ->first();
     }
 
-    public static function getNextLeague(int $currentTierOrder): ?self
+    /**
+     * Get the next tier above the current tier_order.
+     */
+    public static function getNextTier(int $currentTierOrder): ?self
     {
         return static::where('tier_order', '>', $currentTierOrder)
             ->orderBy('tier_order')
+            ->first();
+    }
+
+    /**
+     * Get the previous tier below the current tier_order.
+     */
+    public static function getPreviousTier(int $currentTierOrder): ?self
+    {
+        return static::where('tier_order', '<', $currentTierOrder)
+            ->orderByDesc('tier_order')
             ->first();
     }
 }

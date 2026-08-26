@@ -2,17 +2,17 @@
 
 namespace Database\Seeders;
 
-use App\Models\League;
+use App\Models\LeagueTier;
 use Illuminate\Database\Seeder;
 
 class LeagueSeeder extends Seeder
 {
     /**
-     * Seed the leagues table with 5 tiers.
+     * Seed the league_tiers table with 5 tiers.
      */
     public function run(): void
     {
-        $leagues = [
+        $tiers = [
             [
                 'name' => 'Bronze',
                 'min_points' => 0,
@@ -44,16 +44,16 @@ class LeagueSeeder extends Seeder
             [
                 'name' => 'Diamond',
                 'min_points' => 10000,
-                'max_points' => 999999,
+                'max_points' => null,
                 'icon_url' => '/images/leagues/diamond.png',
                 'tier_order' => 5,
             ],
         ];
 
-        foreach ($leagues as $league) {
-            League::updateOrCreate(
-                ['name' => $league['name']],
-                $league
+        foreach ($tiers as $tier) {
+            LeagueTier::updateOrCreate(
+                ['name' => $tier['name']],
+                $tier
             );
         }
     }

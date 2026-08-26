@@ -11,13 +11,12 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('leagues', function (Blueprint $table) {
+        Schema::create('league_divisions', function (Blueprint $table) {
             $table->bigIncrements('id');
-            $table->string('name', 50);
-            $table->integer('min_points');
-            $table->integer('max_points');
-            $table->string('icon_url')->nullable();
-            $table->integer('tier_order');
+            $table->foreignId('league_season_id')->constrained('league_seasons')->cascadeOnDelete();
+            $table->foreignId('league_tier_id')->constrained('league_tiers')->cascadeOnDelete();
+            $table->integer('division_number')->default(1);
+            $table->integer('max_players')->default(30);
             $table->timestamps();
         });
     }
@@ -27,6 +26,6 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::dropIfExists('leagues');
+        Schema::dropIfExists('league_divisions');
     }
 };

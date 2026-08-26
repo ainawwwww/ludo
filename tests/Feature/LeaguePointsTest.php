@@ -6,9 +6,11 @@ use App\Enums\GameStatus;
 use App\Enums\RoomStatus;
 use App\Enums\RoomType;
 use App\Models\Game;
+use App\Models\LeagueDivisionMember;
 use App\Models\Room;
 use App\Models\RoomPlayer;
 use App\Models\User;
+use App\Services\League\LeagueSeasonService;
 use App\Services\LeagueService;
 use Database\Seeders\LeagueSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -24,16 +26,20 @@ class LeaguePointsTest extends TestCase
         $this->seed(LeagueSeeder::class);
     }
 
-    public function test_game_completion_updates_winner_and_loser_league_points(): void
+    public function test_game_completion_updates_winner_and_loser_league_points_and_division_points(): void
     {
         config([
             'ludo.league_points_win' => 25,
             'ludo.league_points_loss' => 10,
         ]);
 
-        $winner = User::factory()->create(['league_points' => 100]);
-        $loser1 = User::factory()->create(['league_points' => 50]);
-        $loser2 = User::factory()->create(['league_points' => 5]); // Points drop to 0 max
+        $winner = User::factory()->create(['league_points' => 100, 'level' => 4]);
+        $loser1 = User::factory()->create(['league_points' => 50, 'level' => 4]);
+        $loser2 = User::factory()->create(['league_points' => 5, 'level' => 4]); // Points drop to 0 max
+
+        // Create active season and divisions
+        $seasonService = app(LeagueSeasonService::class);
+        $seasonService->startNewSeason();
 
         $room = Room::create([
             'room_code' => 'GAME01',
@@ -68,5 +74,10 @@ class LeaguePointsTest extends TestCase
 
         // Loser2 gets -10, clamped at 0 (5 -> 0)
         $this->assertEquals(0, $loser2->fresh()->league_points);
+
+        // Check division points for winner
+        $winnerMember = LeagueDivisionMember::where('user_id', $winner->id)->first();
+        $this->assertNotNull($winnerMember);
+        $this->assertEquals(25, $winnerMember->points_in_division);
     }
 }

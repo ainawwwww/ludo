@@ -7,6 +7,7 @@ use App\Http\Controllers\Api\DirectMessageController;
 use App\Http\Controllers\Api\FriendController;
 use App\Http\Controllers\Api\GameController;
 use App\Http\Controllers\Api\HomeController;
+use App\Http\Controllers\Api\LeagueController;
 use App\Http\Controllers\Api\LeaderboardController;
 use App\Http\Controllers\Api\MatchmakingController;
 use App\Http\Controllers\Api\ProfileController;
@@ -82,6 +83,10 @@ Route::prefix('v1')->group(function () {
 
         // Leaderboard Ranking Module
         Route::get('/leaderboard', [LeaderboardController::class, 'index']);
+
+        // Dedicated League Flow Module
+        Route::get('/leagues', [LeagueController::class, 'index']);
+        Route::get('/leagues/my-division', [LeagueController::class, 'myDivision']);
 
         // Store & Customization Module
         Route::get('/store/items', [StoreController::class, 'index']);
