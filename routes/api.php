@@ -11,6 +11,7 @@ use App\Http\Controllers\Api\LeagueController;
 use App\Http\Controllers\Api\LeaderboardController;
 use App\Http\Controllers\Api\MatchmakingController;
 use App\Http\Controllers\Api\ProfileController;
+use App\Http\Controllers\Api\QuickMatchChatController;
 use App\Http\Controllers\Api\RoomController;
 use App\Http\Controllers\Api\StoreController;
 use App\Http\Controllers\Api\TournamentController;
@@ -55,17 +56,25 @@ Route::prefix('v1')->group(function () {
         Route::get('/wallet/transactions', [WalletController::class, 'getTransactions']);
         Route::post('/wallet/topup', [WalletController::class, 'topup']);
 
-        // Rooms & Matchmaking Module
-        Route::get('/rooms', [RoomController::class, 'index']);
-        Route::post('/rooms', [RoomController::class, 'store']);
-        Route::post('/rooms/quick-match', [RoomController::class, 'quickMatch']);
-        Route::get('/rooms/{id}', [RoomController::class, 'show']);
-        Route::post('/rooms/join', [RoomController::class, 'join']);
+        // Quick Match Module
+        Route::post('/quick-match', [RoomController::class, 'quickMatch']);
+        Route::post('/quick-match/join', [MatchmakingController::class, 'join']);
+        Route::post('/quick-match/leave', [MatchmakingController::class, 'leave']);
+        Route::get('/quick-match/status', [MatchmakingController::class, 'status']);
+        Route::get('/quick-match/active-match', [MatchmakingController::class, 'activeMatch']);
+        Route::post('/quick-match/start', [GameController::class, 'start']);
+        Route::get('/quick-match/state', [GameController::class, 'getGameState']);
+        Route::post('/quick-match/roll', [GameController::class, 'rollDice']);
+        Route::post('/quick-match/move', [GameController::class, 'moveToken']);
+        Route::post('/quick-match/forfeit', [GameController::class, 'forfeitMatch']);
+        Route::post('/quick-match/message', [QuickMatchChatController::class, 'sendMessage']);
+        Route::get('/quick-match/messages', [QuickMatchChatController::class, 'getMessages']);
 
         // Queue-Based Matchmaking Module
         Route::post('/matchmaking/join', [MatchmakingController::class, 'join']);
         Route::post('/matchmaking/leave', [MatchmakingController::class, 'leave']);
         Route::get('/matchmaking/status', [MatchmakingController::class, 'status']);
+        Route::get('/matchmaking/active-match', [MatchmakingController::class, 'activeMatch']);
 
         // Tournament Ladder System Module
         Route::get('/tournaments', [TournamentController::class, 'index']);
@@ -80,6 +89,7 @@ Route::prefix('v1')->group(function () {
         Route::get('/game/state', [GameController::class, 'getGameState']);
         Route::post('/game/roll', [GameController::class, 'rollDice']);
         Route::post('/game/move', [GameController::class, 'moveToken']);
+        Route::post('/game/forfeit', [GameController::class, 'forfeitMatch']);
 
         // Leaderboard Ranking Module
         Route::get('/leaderboard', [LeaderboardController::class, 'index']);

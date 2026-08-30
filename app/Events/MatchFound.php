@@ -38,6 +38,7 @@ class MatchFound implements ShouldBroadcastNow
     public function broadcastWith(): array
     {
         return [
+            'quick_match_id' => $this->roomId,
             'room_id' => $this->roomId,
             'game_id' => $this->gameId,
             'players' => $this->players,

@@ -40,6 +40,7 @@ class RedisGameStateStore
         $initialUserId = $playerSeats[$initialTurnSeat]['user_id'] ?? null;
 
         $state = [
+            'quick_match_id' => $roomId,
             'room_id' => $roomId,
             'game_id' => $gameId,
             'current_turn_seat' => $initialTurnSeat,

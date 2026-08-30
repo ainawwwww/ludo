@@ -149,4 +149,30 @@ class MatchmakingController extends Controller
             'data' => $result,
         ]);
     }
+
+    /**
+     * GET /api/v1/matchmaking/active-match
+     * Headers: Authorization: Bearer <token>
+     *
+     * Returns the user's active match/game details if they have one in progress.
+     */
+    public function activeMatch(Request $request): JsonResponse
+    {
+        $result = $this->matchmakingService->activeMatch($request->user());
+
+        if (!$result) {
+            return response()->json([
+                'status' => 'success',
+                'data' => [
+                    'status' => 'none',
+                    'message' => 'No active match found',
+                ],
+            ]);
+        }
+
+        return response()->json([
+            'status' => 'success',
+            'data' => $result,
+        ]);
+    }
 }

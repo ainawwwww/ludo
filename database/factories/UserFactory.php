@@ -33,13 +33,14 @@ class UserFactory extends Factory
     public function configure(): static
     {
         return $this->afterCreating(function (User $user) {
-            if (!$user->wallet) {
-                Wallet::create([
-                    'user_id' => $user->id,
+            $wallet = Wallet::firstOrCreate(
+                ['user_id' => $user->id],
+                [
                     'coins_balance' => 10000,
                     'diamonds_balance' => 100,
-                ]);
-            }
+                ]
+            );
+            $user->setRelation('wallet', $wallet);
         });
     }
 }

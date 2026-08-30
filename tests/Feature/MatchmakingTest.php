@@ -251,4 +251,40 @@ class MatchmakingTest extends TestCase
 
         Event::assertDispatched(MatchFound::class, 4);
     }
+
+    public function test_active_match_returns_details_when_matched(): void
+    {
+        Event::fake([MatchFound::class]);
+
+        $user1 = User::factory()->create();
+        $user2 = User::factory()->create();
+
+        // User 1 joins
+        $this->actingAs($user1)->postJson('/api/v1/matchmaking/join', [
+            'max_players' => 2,
+            'entry_fee' => 0,
+        ]);
+
+        // Before match, active-match is none
+        $resNone = $this->actingAs($user1)->getJson('/api/v1/matchmaking/active-match');
+        $resNone->assertStatus(200)
+            ->assertJsonPath('data.status', 'none');
+
+        // User 2 joins, matching user1 and user2
+        $this->actingAs($user2)->postJson('/api/v1/matchmaking/join', [
+            'max_players' => 2,
+            'entry_fee' => 0,
+        ]);
+
+        // Now user1 active-match returns matched
+        $resActive = $this->actingAs($user1)->getJson('/api/v1/matchmaking/active-match');
+        $resActive->assertStatus(200)
+            ->assertJsonPath('data.status', 'matched')
+            ->assertJsonPath('data.players.0.user_id', $user1->id);
+
+        // Leave call on matched user returns already_matched
+        $resLeave = $this->actingAs($user1)->postJson('/api/v1/matchmaking/leave');
+        $resLeave->assertStatus(200)
+            ->assertJsonPath('status', 'already_matched');
+    }
 }

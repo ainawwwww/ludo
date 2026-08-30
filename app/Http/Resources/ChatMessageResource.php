@@ -13,9 +13,9 @@ class ChatMessageResource extends JsonResource
             'id' => $this->id,
             'room_id' => $this->room_id,
             'user_id' => $this->user_id,
-            'user' => new UserResource($this->whenLoaded('user')),
+            'username' => $this->relationLoaded('user') ? $this->user?->username : null,
             'message' => $this->message,
-            'message_type' => $this->message_type,
+            'message_type' => $this->message_type ?? 'text',
             'created_at' => $this->created_at?->toIso8601String(),
         ];
     }

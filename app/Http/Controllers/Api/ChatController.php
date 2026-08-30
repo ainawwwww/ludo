@@ -39,6 +39,9 @@ class ChatController extends Controller
 
         $message->load('user');
 
+        // Broadcast to all players in the room channel
+        broadcast(new \App\Events\ChatMessageSent($request->room_id, $message));
+
         return response()->json([
             'status' => 'success',
             'data' => new ChatMessageResource($message),

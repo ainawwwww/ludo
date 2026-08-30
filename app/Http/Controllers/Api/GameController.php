@@ -8,6 +8,7 @@ use App\Enums\RoomStatus;
 use App\Events\DiceRolled;
 use App\Events\GameEnded;
 use App\Events\GameStarted;
+use App\Events\PlayerForfeited;
 use App\Events\TokenMoved;
 use App\Events\TurnChanged;
 
@@ -17,9 +18,12 @@ use App\Http\Requests\RollDiceRequest;
 
 use App\Jobs\ProcessTurnTimeout;
 
+use App\Enums\TransactionType;
 use App\Models\Game;
 use App\Models\GameMove;
 use App\Models\Room;
+use App\Models\Transaction;
+use App\Models\Wallet;
 
 use App\Services\GameEngine\DiceService;
 use App\Services\GameEngine\MoveValidator;
@@ -54,11 +58,14 @@ class GameController extends Controller
      */
     public function start(Request $request): JsonResponse
     {
-        $request->validate(['room_id' => 'required|integer|exists:rooms,id']);
-        $room = Room::with('players.user')->findOrFail($request->room_id);
+        $roomId = (int) ($request->quick_match_id ?? $request->room_id);
+        if (!$roomId) {
+            return response()->json(['status' => 'error', 'message' => 'quick_match_id or room_id is required'], 400);
+        }
+        $room = Room::with('players.user')->findOrFail($roomId);
 
         if ($room->created_by !== $request->user()->id) {
-            return response()->json(['status' => 'error', 'message' => 'Only room host can start game'], 403);
+            return response()->json(['status' => 'error', 'message' => 'Only match host can start game'], 403);
         }
 
         if ($room->players->count() < 2) {
@@ -101,16 +108,16 @@ class GameController extends Controller
     }
 
     /**
-     * GET /api/v1/game/state?room_id=1
+     * GET /api/v1/game/state?room_id=1 or GET /api/v1/quick-match/state?quick_match_id=1
      * Headers: Authorization: Bearer <token>
      */
     public function getGameState(Request $request): JsonResponse
     {
-        $roomId = (int) $request->query('room_id');
+        $roomId = (int) ($request->query('quick_match_id') ?? $request->query('room_id'));
         $state = $this->stateStore->getState($roomId);
 
         if (!$state) {
-            return response()->json(['status' => 'error', 'message' => 'Active game state not found'], 404);
+            return response()->json(['status' => 'error', 'message' => 'Active match state not found'], 404);
         }
 
         return response()->json([
@@ -120,16 +127,17 @@ class GameController extends Controller
     }
 
     /**
-     * POST /api/v1/game/roll
+     * POST /api/v1/game/roll or POST /api/v1/quick-match/roll
      * Headers: Authorization: Bearer <token>
      */
     public function rollDice(RollDiceRequest $request): JsonResponse
     {
         $user = $request->user();
-        $state = $this->stateStore->getState($request->room_id);
+        $roomId = (int) ($request->quick_match_id ?? $request->room_id);
+        $state = $this->stateStore->getState($roomId);
 
         if (!$state || $state['status'] !== 'in_progress') {
-            return response()->json(['status' => 'error', 'message' => 'No active game in room'], 400);
+            return response()->json(['status' => 'error', 'message' => 'No active match found'], 400);
         }
 
         if ($state['current_turn_user_id'] !== $user->id) {
@@ -163,12 +171,12 @@ class GameController extends Controller
             $state['current_turn_seat'] = $nextSeat;
             $state['current_turn_user_id'] = $state['players'][$nextSeat]['user_id'];
 
-            $this->stateStore->saveState($request->room_id, $state);
+            $this->stateStore->saveState($roomId, $state);
 
-            broadcast(new DiceRolled($request->room_id, $seat, $user->id, $diceRoll, []));
-            broadcast(new TurnChanged($request->room_id, $nextSeat, $state['current_turn_user_id']));
+            broadcast(new DiceRolled($roomId, $seat, $user->id, $diceRoll, []));
+            broadcast(new TurnChanged($roomId, $nextSeat, $state['current_turn_user_id']));
 
-            ProcessTurnTimeout::dispatch($request->room_id, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds(20));
+            ProcessTurnTimeout::dispatch($roomId, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds(20));
 
             return response()->json([
                 'status' => 'success',
@@ -187,12 +195,12 @@ class GameController extends Controller
             $state['current_turn_seat'] = $nextSeat;
             $state['current_turn_user_id'] = $state['players'][$nextSeat]['user_id'];
 
-            $this->stateStore->saveState($request->room_id, $state);
+            $this->stateStore->saveState($roomId, $state);
 
-            broadcast(new DiceRolled($request->room_id, $seat, $user->id, $diceRoll, []));
-            broadcast(new TurnChanged($request->room_id, $nextSeat, $state['current_turn_user_id'], $hasExtraTurn));
+            broadcast(new DiceRolled($roomId, $seat, $user->id, $diceRoll, []));
+            broadcast(new TurnChanged($roomId, $nextSeat, $state['current_turn_user_id'], $hasExtraTurn));
 
-            ProcessTurnTimeout::dispatch($request->room_id, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds(20));
+            ProcessTurnTimeout::dispatch($roomId, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds(20));
 
             return response()->json([
                 'status' => 'success',
@@ -203,9 +211,9 @@ class GameController extends Controller
 
         $state['can_roll'] = false;
         $state['must_move'] = true;
-        $this->stateStore->saveState($request->room_id, $state);
+        $this->stateStore->saveState($roomId, $state);
 
-        broadcast(new DiceRolled($request->room_id, $seat, $user->id, $diceRoll, $movableTokens));
+        broadcast(new DiceRolled($roomId, $seat, $user->id, $diceRoll, $movableTokens));
 
         return response()->json([
             'status' => 'success',
@@ -218,16 +226,17 @@ class GameController extends Controller
     }
 
     /**
-     * POST /api/v1/game/move
+     * POST /api/v1/game/move or POST /api/v1/quick-match/move
      * Headers: Authorization: Bearer <token>
      */
     public function moveToken(MoveTokenRequest $request): JsonResponse
     {
         $user = $request->user();
-        $state = $this->stateStore->getState($request->room_id);
+        $roomId = (int) ($request->quick_match_id ?? $request->room_id);
+        $state = $this->stateStore->getState($roomId);
 
         if (!$state || $state['status'] !== 'in_progress') {
-            return response()->json(['status' => 'error', 'message' => 'No active game in room'], 400);
+            return response()->json(['status' => 'error', 'message' => 'No active match found'], 400);
         }
 
         if ($state['current_turn_user_id'] !== $user->id) {
@@ -274,7 +283,7 @@ class GameController extends Controller
         ]);
 
         broadcast(new TokenMoved(
-            $request->room_id,
+            $roomId,
             $seat,
             $user->id,
             $playerColor,
@@ -291,7 +300,7 @@ class GameController extends Controller
         if ($moveResult['has_won']) {
             $state['status'] = 'completed';
             $state['winner_id'] = $user->id;
-            $this->stateStore->saveState($request->room_id, $state);
+            $this->stateStore->saveState($roomId, $state);
 
             $game = Game::find($state['game_id']);
             if ($game) {
@@ -302,12 +311,12 @@ class GameController extends Controller
                 ]);
 
                 app(\App\Services\LeagueService::class)->awardLeaguePoints($game);
-                app(\App\Services\TournamentService::class)->processMatchResult($request->room_id, $user->id);
+                app(\App\Services\TournamentService::class)->processMatchResult($roomId, $user->id);
             }
 
-            Room::where('id', $request->room_id)->update(['status' => RoomStatus::FINISHED->value]);
+            Room::where('id', $roomId)->update(['status' => RoomStatus::FINISHED->value]);
 
-            broadcast(new GameEnded($request->room_id, $state['game_id'], $user->id, $user->username, 400));
+            broadcast(new GameEnded($roomId, $state['game_id'], $user->id, $user->username, 400));
 
             return response()->json([
                 'status' => 'success',
@@ -331,11 +340,11 @@ class GameController extends Controller
         $state['current_turn_seat'] = $nextSeat;
         $state['current_turn_user_id'] = $state['players'][$nextSeat]['user_id'];
 
-        $this->stateStore->saveState($request->room_id, $state);
+        $this->stateStore->saveState($roomId, $state);
 
-        broadcast(new TurnChanged($request->room_id, $nextSeat, $state['current_turn_user_id'], $grantExtraTurn));
+        broadcast(new TurnChanged($roomId, $nextSeat, $state['current_turn_user_id'], $grantExtraTurn));
 
-        ProcessTurnTimeout::dispatch($request->room_id, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds(20));
+        ProcessTurnTimeout::dispatch($roomId, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds(20));
 
         return response()->json([
             'status' => 'success',
@@ -343,6 +352,138 @@ class GameController extends Controller
                 'move_result' => $moveResult,
                 'game_state' => $state,
             ]
+        ]);
+    }
+
+    /**
+     * POST /api/v1/quick-match/forfeit or POST /api/v1/game/forfeit
+     * Headers: Authorization: Bearer <token>
+     */
+    public function forfeitMatch(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        $roomId = (int) ($request->quick_match_id ?? $request->room_id);
+
+        if (!$roomId) {
+            return response()->json(['status' => 'error', 'message' => 'Room ID is required'], 400);
+        }
+
+        $state = $this->stateStore->getState($roomId);
+        if (!$state || $state['status'] !== 'in_progress') {
+            return response()->json(['status' => 'error', 'message' => 'No active in-progress match found'], 400);
+        }
+
+        $room = Room::find($roomId);
+        $entryFee = (int) ($room?->entry_fee ?? 200);
+        $maxPlayers = (int) ($room?->max_players ?? 2);
+        $totalPrize = max(400, $entryFee * $maxPlayers);
+
+        // Find leaver's seat
+        $leaverSeat = null;
+        foreach ($state['players'] as $seat => $player) {
+            if ((int)$player['user_id'] === (int)$user->id) {
+                $leaverSeat = (int)$seat;
+                break;
+            }
+        }
+
+        if ($leaverSeat === null) {
+            return response()->json(['status' => 'error', 'message' => 'You are not a player in this match'], 403);
+        }
+
+        // Remove leaver from active seats
+        $activeSeats = array_values(array_diff($state['active_seats'], [$leaverSeat]));
+        $state['active_seats'] = $activeSeats;
+        if (isset($state['players'][$leaverSeat])) {
+            $state['players'][$leaverSeat]['is_connected'] = false;
+        }
+
+        // Check if only 1 (or 0) active player remains -> GAME OVER, Remaining Player WINS Full Pot!
+        if (count($activeSeats) <= 1) {
+            $winnerSeat = !empty($activeSeats) ? $activeSeats[0] : null;
+            $winnerPlayer = $winnerSeat !== null ? ($state['players'][$winnerSeat] ?? null) : null;
+            $winnerId = $winnerPlayer['user_id'] ?? null;
+            $winnerUsername = $winnerPlayer['username'] ?? 'Winner';
+
+            $state['status'] = 'completed';
+            $state['winner_id'] = $winnerId;
+            $this->stateStore->saveState($roomId, $state);
+
+            // Update Game in DB
+            $game = Game::find($state['game_id']);
+            if ($game) {
+                $game->update([
+                    'winner_id' => $winnerId,
+                    'status' => GameStatus::COMPLETED->value,
+                    'ended_at' => now(),
+                ]);
+
+                if ($winnerId) {
+                    app(\App\Services\LeagueService::class)->awardLeaguePoints($game);
+                    app(\App\Services\TournamentService::class)->processMatchResult($roomId, $winnerId);
+                }
+            }
+
+            // Award full pot coins to the winning player's wallet
+            if ($winnerId) {
+                Wallet::where('user_id', $winnerId)->increment('coins', $totalPrize);
+
+                Transaction::create([
+                    'user_id' => $winnerId,
+                    'type' => TransactionType::REWARD,
+                    'currency_type' => 'coins',
+                    'amount' => $totalPrize,
+                    'reference_id' => (string) $roomId,
+                    'created_at' => now(),
+                ]);
+            }
+
+            if ($room) {
+                $room->update(['status' => RoomStatus::FINISHED->value]);
+            }
+
+            // Broadcast real-time events
+            broadcast(new GameEnded($roomId, $state['game_id'], $winnerId ?? 0, $winnerUsername, $totalPrize));
+            broadcast(new PlayerForfeited($roomId, $user->id, $user->username, true, $winnerId, $winnerUsername, $totalPrize));
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'You forfeited the match. Remaining player awarded victory.',
+                'data' => [
+                    'is_game_over' => true,
+                    'winner_id' => $winnerId,
+                    'winner_username' => $winnerUsername,
+                    'prize_coins' => $totalPrize,
+                    'game_state' => $state,
+                ],
+            ]);
+        }
+
+        // More than 1 active player remains (4-player match continues with remaining players)
+        // If it was the leaver's turn, pass turn to the next active player
+        if ($state['current_turn_seat'] === $leaverSeat) {
+            $nextSeat = $this->turnManager->getNextTurn($leaverSeat, $state['active_seats'], false);
+            $state['current_turn_seat'] = $nextSeat;
+            $state['current_turn_user_id'] = $state['players'][$nextSeat]['user_id'];
+            $state['can_roll'] = true;
+            $state['must_move'] = false;
+            $state['dice_value'] = null;
+
+            broadcast(new TurnChanged($roomId, $nextSeat, $state['current_turn_user_id']));
+            ProcessTurnTimeout::dispatch($roomId, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds(20));
+        }
+
+        $this->stateStore->saveState($roomId, $state);
+
+        broadcast(new PlayerForfeited($roomId, $user->id, $user->username, false));
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'You left the match. Match continues for remaining players.',
+            'data' => [
+                'is_game_over' => false,
+                'game_state' => $state,
+            ],
         ]);
     }
 }

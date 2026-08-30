@@ -7,6 +7,8 @@ use App\Enums\PlayerColor;
 use App\Enums\RoomStatus;
 use App\Enums\RoomType;
 use App\Events\MatchFound;
+use App\Events\TurnChanged;
+use App\Jobs\ProcessTurnTimeout;
 use App\Models\Game;
 use App\Models\Room;
 use App\Models\RoomPlayer;
@@ -26,6 +28,14 @@ class MatchmakingService
         3 => 'yellow',
         4 => 'blue',
     ];
+
+    private function getColorForMatchSeat(int $seatPosition, int $maxPlayers): string
+    {
+        if ($maxPlayers === 2) {
+            return $seatPosition === 1 ? 'red' : 'yellow';
+        }
+        return self::COLOR_MAP[$seatPosition] ?? 'red';
+    }
 
     /**
      * Join the matchmaking queue for a given max_players and entry_fee.
@@ -99,6 +109,7 @@ class MatchmakingService
                 if ($result['status'] === 'matched') {
                     return [
                         'status' => 'matched',
+                        'quick_match_id' => $result['room_id'],
                         'room_id' => $result['room_id'],
                         'game_id' => $result['game_id'],
                         'players' => $result['players'],
@@ -130,6 +141,62 @@ class MatchmakingService
     }
 
     /**
+     * Check if user has an active in-progress match/room.
+     *
+     * @param User $user
+     * @return array|null
+     */
+    public function activeMatch(User $user): ?array
+    {
+        $roomPlayer = RoomPlayer::where('user_id', $user->id)
+            ->whereHas('room', function ($query) {
+                $query->whereIn('status', [RoomStatus::WAITING->value, RoomStatus::PLAYING->value]);
+            })
+            ->latest('id')
+            ->first();
+
+        if (!$roomPlayer) {
+            return null;
+        }
+
+        $room = $roomPlayer->room;
+        if (!$room) {
+            return null;
+        }
+
+        $game = Game::where('room_id', $room->id)
+            ->where('status', GameStatus::IN_PROGRESS->value)
+            ->latest('id')
+            ->first();
+
+        if (!$game && $room->status !== RoomStatus::WAITING->value) {
+            return null;
+        }
+
+        // Get all players in this room
+        $players = [];
+        $roomPlayers = RoomPlayer::with('user')->where('room_id', $room->id)->orderBy('seat_position')->get();
+        foreach ($roomPlayers as $rp) {
+            $u = $rp->user;
+            $players[] = [
+                'user_id' => $rp->user_id,
+                'username' => $u ? $u->username : 'Player',
+                'avatar_url' => $u ? $u->avatar_url : null,
+                'seat_position' => $rp->seat_position,
+                'color' => $rp->color instanceof PlayerColor ? $rp->color->value : (string) $rp->color,
+            ];
+        }
+
+        return [
+            'status' => 'matched',
+            'quick_match_id' => $room->id,
+            'room_id' => $room->id,
+            'game_id' => $game ? $game->id : null,
+            'players' => $players,
+        ];
+    }
+
+    /**
      * Remove a user from whatever matchmaking queue they're in.
      *
      * @param User $user
@@ -141,6 +208,16 @@ class MatchmakingService
         $queueKey = Cache::get($userQueueKey);
 
         if (!$queueKey) {
+            // Check if user is already in an active room/game
+            $activeMatch = $this->activeMatch($user);
+            if ($activeMatch) {
+                return [
+                    'status' => 'already_matched',
+                    'message' => 'User is already matched into an active game',
+                    'data' => $activeMatch,
+                ];
+            }
+
             return [
                 'status' => 'success',
                 'message' => 'Not currently in any matchmaking queue',
@@ -287,7 +364,7 @@ class MatchmakingService
             $seatPosition = 1;
             foreach ($matchedUsers as $mu) {
                 $user = User::find($mu['user_id']);
-                $color = self::COLOR_MAP[$seatPosition] ?? PlayerColor::RED->value;
+                $color = $this->getColorForMatchSeat($seatPosition, $maxPlayers);
 
                 RoomPlayer::create([
                     'room_id' => $room->id,
@@ -326,7 +403,7 @@ class MatchmakingService
 
             // Initialize Redis game state
             $stateStore = app(RedisGameStateStore::class);
-            $stateStore->initializeState($room->id, $game->id, $playerData);
+            $gameState = $stateStore->initializeState($room->id, $game->id, $playerData);
 
             // Broadcast MatchFound to each matched player's private channel
             foreach ($matchedUsers as $mu) {
@@ -338,8 +415,23 @@ class MatchmakingService
                 ));
             }
 
+            // Broadcast initial TurnChanged to room channel
+            $initialTurnSeat = $gameState['current_turn_seat'] ?? 0;
+            $initialUserId = $gameState['current_turn_user_id'] ?? $matchedUsers[0]['user_id'];
+            broadcast(new TurnChanged(
+                $room->id,
+                $initialTurnSeat,
+                $initialUserId,
+                false
+            ));
+
+            // Dispatch 15-second turn timeout job
+            ProcessTurnTimeout::dispatch($room->id, $initialTurnSeat, $gameState['last_action_at'])
+                ->delay(now()->addSeconds(15));
+
             return [
                 'status' => 'matched',
+                'quick_match_id' => $room->id,
                 'room_id' => $room->id,
                 'game_id' => $game->id,
                 'players' => $players,
