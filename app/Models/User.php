@@ -128,6 +128,31 @@ class User extends Authenticatable
         return $this->hasMany(Friend::class, 'user_id');
     }
 
+    public function following(): HasMany
+    {
+        return $this->hasMany(Follow::class, 'user_id');
+    }
+
+    public function followers(): HasMany
+    {
+        return $this->hasMany(Follow::class, 'followed_user_id');
+    }
+
+    public function followingUsers(): BelongsToMany
+    {
+        return $this->belongsToMany(User::class, 'follows', 'user_id', 'followed_user_id');
+    }
+
+    public function followerUsers(): BelongsToMany
+    {
+        return $this->belongsToMany(User::class, 'follows', 'followed_user_id', 'user_id');
+    }
+
+    public function roomVisits(): HasMany
+    {
+        return $this->hasMany(RoomVisit::class, 'user_id');
+    }
+
     /**
      * Get all room_players records for this user (used to compute game stats).
      */

@@ -114,6 +114,9 @@ class AuthController extends Controller
             ], 401);
         }
 
+        $user->is_active = true;
+        $user->save();
+
         $token = $user->createToken('auth_token')->plainTextToken;
 
         return response()->json([
@@ -161,7 +164,12 @@ class AuthController extends Controller
      */
     public function logout(Request $request): JsonResponse
     {
-        $request->user()->currentAccessToken()->delete();
+        $user = $request->user();
+        if ($user) {
+            $user->currentAccessToken()?->delete();
+            $user->is_active = false;
+            $user->save();
+        }
 
         return response()->json([
             'status' => 'success',
@@ -270,6 +278,8 @@ class AuthController extends Controller
             if ($existingUser) {
                 // Revoke old tokens if any
                 $existingUser->tokens()->delete();
+                $existingUser->is_active = true;
+                $existingUser->save();
                 $token = $existingUser->createToken('guest_token')->plainTextToken;
 
                 return response()->json([

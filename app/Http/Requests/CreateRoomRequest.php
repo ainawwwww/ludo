@@ -14,6 +14,9 @@ class CreateRoomRequest extends FormRequest
     public function rules(): array
     {
         return [
+            'title' => 'nullable|string|max:100',
+            'category' => 'nullable|string|max:50',
+            'country_code' => 'nullable|string|max:10',
             'type' => 'nullable|in:public,private',
             'max_players' => 'nullable|integer|between:2,4',
             'entry_fee' => 'nullable|integer|min:0',

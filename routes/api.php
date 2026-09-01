@@ -9,6 +9,7 @@ use App\Http\Controllers\Api\GameController;
 use App\Http\Controllers\Api\HomeController;
 use App\Http\Controllers\Api\LeagueController;
 use App\Http\Controllers\Api\LeaderboardController;
+use App\Http\Controllers\Api\LobbyController;
 use App\Http\Controllers\Api\MatchmakingController;
 use App\Http\Controllers\Api\ProfileController;
 use App\Http\Controllers\Api\QuickMatchChatController;
@@ -105,8 +106,14 @@ Route::prefix('v1')->group(function () {
 
         // Friends Social Module
         Route::get('/friends', [FriendController::class, 'index']);
+        Route::get('/friends/requests', [FriendController::class, 'incomingRequests']);
         Route::post('/friends/request', [FriendController::class, 'sendRequest']);
         Route::post('/friends/{id}/respond', [FriendController::class, 'respondRequest']);
+
+        // Follow Module
+        Route::post('/users/{id}/follow', [\App\Http\Controllers\Api\FollowController::class, 'follow']);
+        Route::post('/users/{id}/unfollow', [\App\Http\Controllers\Api\FollowController::class, 'unfollow']);
+        Route::get('/users/{id}/follow-status', [\App\Http\Controllers\Api\FollowController::class, 'status']);
 
         // Direct Messaging & Voice Notes Module
         Route::get('/friends/conversations', [DirectMessageController::class, 'getConversations']);
@@ -117,5 +124,22 @@ Route::prefix('v1')->group(function () {
         // Room Live Chat Module
         Route::post('/chat/message', [ChatController::class, 'sendMessage']);
         Route::get('/chat/messages', [ChatController::class, 'getMessages']);
+
+        // Lobby Data Module (Phase 1)
+        Route::get('/lobby/explore', [LobbyController::class, 'explore']);
+        Route::get('/lobby/hot', [LobbyController::class, 'hot']);
+        Route::get('/lobby/my', [LobbyController::class, 'my']);
+
+        // Rooms Module
+        Route::get('/rooms', [RoomController::class, 'index']);
+        Route::post('/rooms', [RoomController::class, 'store']);
+        Route::get('/rooms/{id}', [RoomController::class, 'show']);
+        Route::post('/rooms/join', [RoomController::class, 'join']);
+        Route::post('/rooms/{room}/join', [RoomController::class, 'joinAsListener']);
+        Route::post('/rooms/{room}/seat', [RoomController::class, 'takeSeat']);
+        Route::post('/rooms/{room}/take-seat', [RoomController::class, 'takeSeat']);
+        Route::post('/rooms/{room}/leave-seat', [RoomController::class, 'leaveSeat']);
+        Route::post('/rooms/quick-match', [RoomController::class, 'quickMatch']);
     });
 });
+

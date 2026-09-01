@@ -19,6 +19,13 @@ class Room extends Model
 
     protected $fillable = [
         'room_code',
+        'title',
+        'category',
+        'tags',
+        'country_code',
+        'cover_image',
+        'member_count',
+        'is_live',
         'type',
         'max_players',
         'entry_fee',
@@ -30,6 +37,9 @@ class Room extends Model
     protected function casts(): array
     {
         return [
+            'tags' => 'array',
+            'member_count' => 'integer',
+            'is_live' => 'boolean',
             'type' => RoomType::class,
             'status' => RoomStatus::class,
             'max_players' => 'integer',
@@ -56,5 +66,10 @@ class Room extends Model
     public function chatMessages(): HasMany
     {
         return $this->hasMany(ChatMessage::class, 'room_id');
+    }
+
+    public function visits(): HasMany
+    {
+        return $this->hasMany(RoomVisit::class, 'room_id');
     }
 }
