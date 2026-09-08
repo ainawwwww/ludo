@@ -10,4 +10,5 @@ enum TransactionType: string
     case TOPUP = 'topup';
     case GIFT = 'gift';
     case ENTRY_FEE = 'entry_fee';
+    case REWARD = 'reward';
 }

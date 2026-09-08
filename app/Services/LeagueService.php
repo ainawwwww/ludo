@@ -41,6 +41,7 @@ class LeagueService
             $winner = User::lockForUpdate()->find($game->winner_id);
             if ($winner) {
                 $winner->increment('league_points', $winAmount);
+                $winner->addXp(50);
 
                 if ($activeSeason) {
                     $winnerMember = LeagueDivisionMember::whereHas('division', function ($q) use ($activeSeason) {
@@ -65,6 +66,7 @@ class LeagueService
             foreach ($roomPlayers as $rp) {
                 $loser = User::lockForUpdate()->find($rp->user_id);
                 if ($loser) {
+                    $loser->addXp(15);
                     $currentPoints = (int) ($loser->league_points ?? 0);
                     $newPoints = max(0, $currentPoints - $lossAmount);
                     $loser->update(['league_points' => $newPoints]);
