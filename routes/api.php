@@ -103,6 +103,7 @@ Route::prefix('v1')->group(function () {
         Route::get('/store/items', [StoreController::class, 'index']);
         Route::post('/store/purchase', [StoreController::class, 'purchase']);
         Route::get('/store/inventory', [StoreController::class, 'inventory']);
+        Route::post('/store/equip', [StoreController::class, 'equip']);
 
         // Friends Social Module
         Route::get('/friends', [FriendController::class, 'index']);

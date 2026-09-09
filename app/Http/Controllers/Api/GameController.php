@@ -426,7 +426,7 @@ class GameController extends Controller
 
             // Award full pot coins to the winning player's wallet
             if ($winnerId) {
-                Wallet::where('user_id', $winnerId)->increment('coins', $totalPrize);
+                Wallet::where('user_id', $winnerId)->increment('coins_balance', $totalPrize);
 
                 Transaction::create([
                     'user_id' => $winnerId,

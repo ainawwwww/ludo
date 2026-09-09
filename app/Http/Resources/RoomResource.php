@@ -39,6 +39,10 @@ class RoomResource extends JsonResource
                     'color' => $player->color,
                     'is_ready' => (bool) $player->is_ready,
                     'score' => $player->score ?? 0,
+                    'equipped_dice' => $player->user?->metadata['equipped']['dice_skin'] ?? null,
+                    'equipped_token' => $player->user?->metadata['equipped']['token_skin'] ?? null,
+                    'equipped_theme' => $player->user?->metadata['equipped']['board_theme'] ?? null,
+                    'avatar_frame' => $player->user?->metadata['equipped']['avatar_frame'] ?? null,
                     'joined_at' => $player->joined_at?->toIso8601String(),
                 ];
             }) : [],
