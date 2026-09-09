@@ -181,6 +181,8 @@ class EventsService
                 'reward_amount' => $finalReward,
                 'coins' => $wallet->coins_balance,
                 'diamonds' => $wallet->diamonds_balance,
+                'xp' => (int) $user->xp,
+                'level' => (int) $user->level,
             ];
         });
     }

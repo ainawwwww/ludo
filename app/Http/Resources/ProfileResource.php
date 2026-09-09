@@ -92,6 +92,7 @@ class ProfileResource extends JsonResource
             'id' => $this->id,
             'name' => $this->username,
             'level' => $this->level ?? 1,
+            'xp' => (int) ($this->xp ?? 0),
             'avatar_url' => $this->avatar_url,
             'gender' => $this->gender ?? 'unspecified',
             'dob' => $this->dob?->toDateString(),
