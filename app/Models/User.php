@@ -39,6 +39,8 @@ class User extends Authenticatable
         'name_change_reset_at',
         'league_points',
         'rank',
+        'last_chest_claimed_at',
+        'vip_expires_at',
     ];
 
     protected $hidden = [
@@ -59,6 +61,8 @@ class User extends Authenticatable
             'name_change_reset_at' => 'datetime',
             'league_points' => 'integer',
             'rank' => 'integer',
+            'last_chest_claimed_at' => 'datetime',
+            'vip_expires_at' => 'datetime',
         ];
     }
 
@@ -105,6 +109,16 @@ class User extends Authenticatable
         }
         $wallet = Wallet::where('user_id', $this->id)->first();
         return $wallet ? (int) $wallet->diamonds_balance : 0;
+    }
+
+    public function getIsVipAttribute(): bool
+    {
+        return $this->vip_expires_at !== null && $this->vip_expires_at->isFuture();
+    }
+
+    public function dailyTasks(): HasMany
+    {
+        return $this->hasMany(UserDailyTask::class, 'user_id');
     }
 
     public function wallet(): HasOne

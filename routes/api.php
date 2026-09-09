@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\ChatController;
 use App\Http\Controllers\Api\CountryController;
 use App\Http\Controllers\Api\DirectMessageController;
+use App\Http\Controllers\Api\EventController;
 use App\Http\Controllers\Api\FriendController;
 use App\Http\Controllers\Api\GameController;
 use App\Http\Controllers\Api\HomeController;
@@ -130,6 +131,12 @@ Route::prefix('v1')->group(function () {
         Route::get('/lobby/explore', [LobbyController::class, 'explore']);
         Route::get('/lobby/hot', [LobbyController::class, 'hot']);
         Route::get('/lobby/my', [LobbyController::class, 'my']);
+
+        // Events & Rewards Module
+        Route::get('/events/daily-tasks', [EventController::class, 'getDailyTasks']);
+        Route::post('/events/daily-tasks/{id}/claim', [EventController::class, 'claimDailyTask']);
+        Route::get('/events/arrival-chest', [EventController::class, 'getArrivalChest']);
+        Route::post('/events/arrival-chest/claim', [EventController::class, 'claimArrivalChest']);
 
         // Rooms Module
         Route::get('/rooms', [RoomController::class, 'index']);
