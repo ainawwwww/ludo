@@ -92,6 +92,12 @@ class User extends Authenticatable
         $this->save();
     }
 
+    public function getLevelAttribute($value): int
+    {
+        $calculated = max(1, (int) floor(((int) ($this->xp ?? 0)) / 100) + 1);
+        return max((int) ($value ?? 1), $calculated);
+    }
+
     // Accessors for coins and diamonds from associated wallet
     public function getCoinsAttribute(): int
     {
