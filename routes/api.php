@@ -37,6 +37,9 @@ Route::prefix('v1')->group(function () {
     Route::post('/auth/guest', [AuthController::class, 'guest']);
     Route::post('/auth/google', [AuthController::class, 'google']);
 
+    // Public Tournament Winners Endpoint
+    Route::get('/tournaments/winners', [TournamentController::class, 'winners']);
+
     // Countries Public Endpoint (needed on registration screen)
     Route::get('/countries', [CountryController::class, 'index']);
 
@@ -80,10 +83,13 @@ Route::prefix('v1')->group(function () {
 
         // Tournament Ladder System Module
         Route::get('/tournaments', [TournamentController::class, 'index']);
+        Route::get('/tournaments/winners', [TournamentController::class, 'winners']);
+        Route::get('/tournaments/my-history', [TournamentController::class, 'myHistory']);
         Route::get('/tournaments/{id}', [TournamentController::class, 'show']);
         Route::post('/tournaments/{id}/join', [TournamentController::class, 'join']);
         Route::post('/tournaments/{id}/continue', [TournamentController::class, 'continueMatch']);
         Route::post('/tournaments/{id}/leave', [TournamentController::class, 'leave']);
+        Route::post('/tournaments/{id}/claim', [TournamentController::class, 'claim']);
         Route::get('/tournaments/{id}/progress', [TournamentController::class, 'progress']);
 
         // Real-time Game Engine Module

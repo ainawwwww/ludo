@@ -18,6 +18,8 @@ class TournamentParticipant extends Model
         'current_level',
         'highest_level_reached',
         'status',
+        'is_claimed',
+        'claimed_at',
         'joined_at',
     ];
 
@@ -26,6 +28,8 @@ class TournamentParticipant extends Model
         return [
             'current_level' => 'integer',
             'highest_level_reached' => 'integer',
+            'is_claimed' => 'boolean',
+            'claimed_at' => 'datetime',
             'joined_at' => 'datetime',
         ];
     }

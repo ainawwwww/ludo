@@ -22,7 +22,9 @@ class TournamentController extends Controller
     {
         $user = $request->user();
 
-        $tournaments = Tournament::where('status', 'active')
+        $tournaments = Tournament::with(['levels'])
+            ->withCount('participants')
+            ->where('status', 'active')
             ->orderBy('entry_fee')
             ->get();
 
@@ -41,12 +43,20 @@ class TournamentController extends Controller
                 'currency_type' => $tournament->currency_type,
                 'prize_pool' => $tournament->prize_pool,
                 'max_level' => $tournament->max_level,
+                'unlock_level' => $tournament->unlock_level ?? 1,
+                'participant_count' => max($tournament->participants_count ?? 0, 32),
                 'status' => $tournament->status,
+                'levels' => $tournament->levels->map(fn($lvl) => [
+                    'level' => $lvl->level,
+                    'reward_coins' => $lvl->reward_coins,
+                    'reward_diamonds' => $lvl->reward_diamonds,
+                ]),
                 'user_participation' => $p ? [
                     'is_active' => $p->status === 'active',
                     'current_level' => $p->current_level,
                     'highest_level_reached' => $p->highest_level_reached,
                     'status' => $p->status,
+                    'is_claimed' => (bool) ($p->is_claimed ?? false),
                 ] : null,
             ];
         });
@@ -185,6 +195,69 @@ class TournamentController extends Controller
                 'status' => $p->status,
                 'joined_at' => $p->joined_at?->toIso8601String(),
             ],
+        ]);
+    }
+
+    /**
+     * GET /api/v1/tournaments/my-history
+     */
+    public function myHistory(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        $history = $this->tournamentService->getUserTournamentHistory($user);
+
+        return response()->json([
+            'status' => 'success',
+            'data' => $history,
+        ]);
+    }
+
+    /**
+     * POST /api/v1/tournaments/{id}/claim
+     */
+    public function claim(Request $request, int $id): JsonResponse
+    {
+        $user = $request->user();
+        $result = $this->tournamentService->claimPrize($user, $id);
+
+        if (isset($result['status']) && in_array($result['status'], ['error', 'already_claimed'])) {
+            return response()->json([
+                'status' => $result['status'],
+                'message' => $result['message'],
+            ], $result['code'] ?? 400);
+        }
+
+        return response()->json([
+            'status' => 'success',
+            'data' => $result,
+        ]);
+    }
+
+    /**
+     * GET /api/v1/tournaments/winners
+     */
+    public function winners(): JsonResponse
+    {
+        $winners = TournamentParticipant::with(['user:id,username', 'tournament:id,name,mode,prize_pool'])
+            ->where('highest_level_reached', '>=', 6)
+            ->orWhere('status', 'champion')
+            ->latest('updated_at')
+            ->limit(10)
+            ->get();
+
+        $data = $winners->map(function ($w) {
+            return [
+                'username' => $w->user->username ?? 'Player',
+                'prize_gold' => $w->tournament->prize_pool ?? 1000000,
+                'tournament_title' => $w->tournament->name ?? 'Classic Tournament',
+                'mode' => $w->tournament->mode ?? 'classic',
+                'round_reached' => $w->highest_level_reached ?? 6,
+            ];
+        });
+
+        return response()->json([
+            'status' => 'success',
+            'data' => $data,
         ]);
     }
 }
