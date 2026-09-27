@@ -27,6 +27,12 @@ class TokenMoved implements ShouldBroadcastNow
         public bool $reachedHome
     ) {}
 
+    /**
+     * Intentional dual-channel broadcast for network resilience:
+     * - PrivateChannel: Secure authenticated room channel.
+     * - Channel: Public fallback channel ensuring delivery even during socket auth re-negotiations.
+     * Frontend deduplicates via _recentWsEventSignatures. Do NOT remove either channel.
+     */
     public function broadcastOn(): array
     {
         return [

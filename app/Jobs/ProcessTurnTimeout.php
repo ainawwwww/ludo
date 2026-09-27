@@ -47,39 +47,30 @@ class ProcessTurnTimeout implements ShouldQueue
         $playerColor = $state['players'][$seat]['color'];
         $tokens = $state['token_positions'][$playerColor];
 
-        // 1. Auto-roll if player hasn't rolled yet
+        // 1. If player hasn't rolled yet -> timeout expired! Forfeit turn and pass directly to next player (NO AUTO-ROLL)
         if ($state['can_roll']) {
-            $diceRoll = $diceService->roll();
-            $state['dice_value'] = $diceRoll;
-            $movableTokens = $moveValidator->getMovableTokens($tokens, $diceRoll);
+            $nextSeat = $turnManager->getNextTurn($seat, $state['active_seats'], false);
+            $state['can_roll'] = true;
+            $state['must_move'] = false;
+            $state['dice_value'] = null;
+            $state['consecutive_sixes'] = 0;
+            $state['current_turn_seat'] = $nextSeat;
+            $state['current_turn_user_id'] = $state['players'][$nextSeat]['user_id'];
+            $state['last_action_at'] = now()->toIso8601String();
 
-            broadcast(new DiceRolled($this->roomId, $seat, $userId, $diceRoll, $movableTokens));
+            $stateStore->saveState($this->roomId, $state);
 
-            if (empty($movableTokens)) {
-                // No legal moves: pass turn to next player
-                $nextSeat = $turnManager->getNextTurn($seat, $state['active_seats'], false);
-                $state['can_roll'] = true;
-                $state['must_move'] = false;
-                $state['current_turn_seat'] = $nextSeat;
-                $state['current_turn_user_id'] = $state['players'][$nextSeat]['user_id'];
-                $state['dice_value'] = null;
+            broadcast(new TurnChanged($this->roomId, $nextSeat, $state['current_turn_user_id'], false));
 
-                $stateStore->saveState($this->roomId, $state);
-
-                broadcast(new TurnChanged($this->roomId, $nextSeat, $state['current_turn_user_id'], false));
-
-                // Dispatch delayed turn timeout job for next player
-                self::dispatch($this->roomId, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds(20));
-                return;
-            }
-
-            // Auto-pick first movable token
-            $chosenToken = $movableTokens[0];
-        } else {
-            $diceRoll = $state['dice_value'];
-            $movableTokens = $moveValidator->getMovableTokens($tokens, $diceRoll);
-            $chosenToken = !empty($movableTokens) ? $movableTokens[0] : 0;
+            // Dispatch delayed turn timeout job for next player
+            self::dispatch($this->roomId, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds(15));
+            return;
         }
+
+        // 2. Player rolled previously but timed out picking a piece: auto-pick first legal movable token
+        $diceRoll = $state['dice_value'];
+        $movableTokens = $moveValidator->getMovableTokens($tokens, $diceRoll);
+        $chosenToken = !empty($movableTokens) ? $movableTokens[0] : 0;
 
         // 2. Perform auto-move on chosen token
         $moveResult = $moveValidator->validateMove($state['token_positions'], $playerColor, $chosenToken, $diceRoll);
@@ -117,12 +108,13 @@ class ProcessTurnTimeout implements ShouldQueue
         $state['dice_value'] = null;
         $state['current_turn_seat'] = $nextSeat;
         $state['current_turn_user_id'] = $state['players'][$nextSeat]['user_id'];
+        $state['last_action_at'] = now()->toIso8601String();
 
         $stateStore->saveState($this->roomId, $state);
 
         broadcast(new TurnChanged($this->roomId, $nextSeat, $state['current_turn_user_id'], $grantExtra));
 
-        // Dispatch delayed turn timeout job for next player turn
-        self::dispatch($this->roomId, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds(20));
+        // 17s = 15s UI timer + 2s network grace buffer, intentional
+        self::dispatch($this->roomId, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds(17));
     }
 }

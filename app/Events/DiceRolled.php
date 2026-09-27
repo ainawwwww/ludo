@@ -21,6 +21,12 @@ class DiceRolled implements ShouldBroadcastNow
         public array $movableTokens
     ) {}
 
+    /**
+     * Intentional dual-channel broadcast for network resilience:
+     * - PrivateChannel: Secure authenticated room channel.
+     * - Channel: Public fallback channel ensuring delivery even during socket auth re-negotiations.
+     * Frontend deduplicates via _recentWsEventSignatures. Do NOT remove either channel.
+     */
     public function broadcastOn(): array
     {
         return [
