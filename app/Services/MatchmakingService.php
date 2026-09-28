@@ -425,10 +425,12 @@ class MatchmakingService
                 false
             ));
 
-            // Dispatch turn timeout job with turn_seconds + 2s grace
-            $turnSeconds = (int) ($gameState['turn_seconds'] ?? 15);
+            // Dispatch turn timeout job: 15s default for quick match, or turn_seconds + 2 if explicitly set
+            $delay = isset($gameState['turn_seconds']) && $gameState['turn_seconds'] !== null
+                ? ((int) $gameState['turn_seconds'] + 2)
+                : 15;
             ProcessTurnTimeout::dispatch($room->id, $initialTurnSeat, $gameState['last_action_at'])
-                ->delay(now()->addSeconds($turnSeconds + 2));
+                ->delay(now()->addSeconds($delay));
 
             return [
                 'status' => 'matched',

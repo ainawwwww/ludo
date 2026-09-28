@@ -31,6 +31,12 @@ class FeatureEnhancementsTest extends TestCase
 {
     use RefreshDatabase;
 
+    protected function setUp(): void
+    {
+        parent::setUp();
+        Queue::fake([ProcessTurnTimeout::class]);
+    }
+
     public function test_guest_login_creates_guest_user_and_wallet(): void
     {
         $response = $this->postJson('/api/v1/auth/guest');
@@ -207,7 +213,6 @@ class FeatureEnhancementsTest extends TestCase
 
         // Execute turn timeout job
         $job = new ProcessTurnTimeout(999, 0, $initialTimestamp);
-        Queue::fake([ProcessTurnTimeout::class]);
         $job->handle($stateStore, new DiceService(), new MoveValidator($boardService), new TurnManager());
 
         $newState = $stateStore->getState(999);

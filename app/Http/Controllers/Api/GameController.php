@@ -98,10 +98,12 @@ class GameController extends Controller
         // Explicit WebSocket Broadcast
         broadcast(new GameStarted($room->id, $gameState));
 
-        // Dispatch turn timeout job with turn_seconds + 2s grace
-        $turnSeconds = (int) ($gameState['turn_seconds'] ?? 15);
+        // Dispatch turn timeout job: 20s default, or turn_seconds + 2 if explicitly set
+        $delay = isset($gameState['turn_seconds']) && $gameState['turn_seconds'] !== null
+            ? ((int) $gameState['turn_seconds'] + 2)
+            : 20;
         ProcessTurnTimeout::dispatch($room->id, $gameState['current_turn_seat'], $gameState['last_action_at'])
-            ->delay(now()->addSeconds($turnSeconds + 2));
+            ->delay(now()->addSeconds($delay));
 
         return response()->json([
             'status' => 'success',
@@ -166,8 +168,9 @@ class GameController extends Controller
 
                 $state['dice_value'] = $diceRoll;
                 $state['consecutive_sixes'] = $consecutiveSixes;
-                $turnSeconds = (int) ($state['turn_seconds'] ?? 15);
-                $delay = $turnSeconds + 2;
+                $delay = isset($state['turn_seconds']) && $state['turn_seconds'] !== null
+                    ? ((int) $state['turn_seconds'] + 2)
+                    : 20;
 
                 // Rule: 3 consecutive sixes forfeits turn
                 if ($consecutiveSixes >= TurnManager::MAX_CONSECUTIVE_SIXES) {
@@ -234,7 +237,7 @@ class GameController extends Controller
                 ]);
             });
         } catch (LockTimeoutException $e) {
-            return response()->json(['status' => 'error', 'message' => 'Action in progress, please retry'], 429);
+            return response()->json(['status' => 'error', 'message' => 'Action in progress, please retry'], 409);
         }
     }
 
@@ -356,8 +359,9 @@ class GameController extends Controller
                 $state['dice_value'] = null;
                 $state['current_turn_seat'] = $nextSeat;
                 $state['current_turn_user_id'] = $state['players'][$nextSeat]['user_id'];
-                $turnSeconds = (int) ($state['turn_seconds'] ?? 15);
-                $delay = $turnSeconds + 2;
+                $delay = isset($state['turn_seconds']) && $state['turn_seconds'] !== null
+                    ? ((int) $state['turn_seconds'] + 2)
+                    : 20;
 
                 $this->stateStore->saveState($roomId, $state);
 
@@ -374,7 +378,7 @@ class GameController extends Controller
                 ]);
             });
         } catch (LockTimeoutException $e) {
-            return response()->json(['status' => 'error', 'message' => 'Action in progress, please retry'], 429);
+            return response()->json(['status' => 'error', 'message' => 'Action in progress, please retry'], 409);
         }
     }
 
@@ -493,8 +497,10 @@ class GameController extends Controller
             $state['dice_value'] = null;
 
             broadcast(new TurnChanged($roomId, $nextSeat, $state['current_turn_user_id']));
-            $turnSeconds = (int) ($state['turn_seconds'] ?? 15);
-            ProcessTurnTimeout::dispatch($roomId, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds($turnSeconds + 2));
+            $delay = isset($state['turn_seconds']) && $state['turn_seconds'] !== null
+                ? ((int) $state['turn_seconds'] + 2)
+                : 20;
+            ProcessTurnTimeout::dispatch($roomId, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds($delay));
         }
 
         $this->stateStore->saveState($roomId, $state);

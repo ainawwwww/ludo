@@ -19,10 +19,13 @@ class ProcessTurnTimeout implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
+    public const MAX_LOCK_RETRIES = 3;
+
     public function __construct(
         public int $roomId,
         public int $turnSeat,
-        public string $turnStartedAt
+        public string $turnStartedAt,
+        public int $retryCount = 0
     ) {}
 
     public function handle(
@@ -50,8 +53,10 @@ class ProcessTurnTimeout implements ShouldQueue
                 $userId = $state['current_turn_user_id'];
                 $playerColor = $state['players'][$seat]['color'];
                 $tokens = $state['token_positions'][$playerColor];
-                $turnSeconds = (int) ($state['turn_seconds'] ?? 15);
-                $delay = $turnSeconds + 2;
+
+                $hasExplicitTurn = isset($state['turn_seconds']) && $state['turn_seconds'] !== null;
+                $delaySite1 = $hasExplicitTurn ? ((int) $state['turn_seconds'] + 2) : 15;
+                $delaySite2 = $hasExplicitTurn ? ((int) $state['turn_seconds'] + 2) : 17;
 
                 // 1. If player hasn't rolled yet -> timeout expired! Forfeit turn and pass directly to next player (NO AUTO-ROLL)
                 if ($state['can_roll']) {
@@ -69,7 +74,7 @@ class ProcessTurnTimeout implements ShouldQueue
                     broadcast(new TurnChanged($this->roomId, $nextSeat, $state['current_turn_user_id'], false));
 
                     // Dispatch delayed turn timeout job for next player
-                    self::dispatch($this->roomId, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds($delay));
+                    self::dispatch($this->roomId, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds($delaySite1));
                     return;
                 }
 
@@ -120,10 +125,13 @@ class ProcessTurnTimeout implements ShouldQueue
 
                 broadcast(new TurnChanged($this->roomId, $nextSeat, $state['current_turn_user_id'], $grantExtra));
 
-                self::dispatch($this->roomId, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds($delay));
+                self::dispatch($this->roomId, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds($delaySite2));
             });
         } catch (\Illuminate\Contracts\Cache\LockTimeoutException $e) {
-            // Lock contention, another action was executing
+            if ($this->retryCount < self::MAX_LOCK_RETRIES) {
+                self::dispatch($this->roomId, $this->turnSeat, $this->turnStartedAt, $this->retryCount + 1)
+                    ->delay(now()->addSeconds(1));
+            }
         }
     }
 }
