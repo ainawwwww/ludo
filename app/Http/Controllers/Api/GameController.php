@@ -32,6 +32,8 @@ use App\Services\GameEngine\TurnManager;
 
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Contracts\Cache\LockTimeoutException;
 
 class GameController extends Controller
 {
@@ -96,9 +98,10 @@ class GameController extends Controller
         // Explicit WebSocket Broadcast
         broadcast(new GameStarted($room->id, $gameState));
 
-        // Dispatch 20-second turn timeout job
+        // Dispatch turn timeout job with turn_seconds + 2s grace
+        $turnSeconds = (int) ($gameState['turn_seconds'] ?? 15);
         ProcessTurnTimeout::dispatch($room->id, $gameState['current_turn_seat'], $gameState['last_action_at'])
-            ->delay(now()->addSeconds(20));
+            ->delay(now()->addSeconds($turnSeconds + 2));
 
         return response()->json([
             'status' => 'success',
@@ -134,95 +137,105 @@ class GameController extends Controller
     {
         $user = $request->user();
         $roomId = (int) ($request->quick_match_id ?? $request->room_id);
-        $state = $this->stateStore->getState($roomId);
+        $lock = Cache::lock("ludo:lock:game:{$roomId}", 5);
 
-        if (!$state || $state['status'] !== 'in_progress') {
-            return response()->json(['status' => 'error', 'message' => 'No active match found'], 400);
+        try {
+            return $lock->block(3, function () use ($request, $roomId, $user) {
+                $state = $this->stateStore->getState($roomId);
+
+                if (!$state || $state['status'] !== 'in_progress') {
+                    return response()->json(['status' => 'error', 'message' => 'No active match found'], 400);
+                }
+
+                if ($state['current_turn_user_id'] !== $user->id) {
+                    return response()->json(['status' => 'error', 'message' => 'Not your turn'], 403);
+                }
+
+                if (!$state['can_roll']) {
+                    return response()->json(['status' => 'error', 'message' => 'Already rolled dice'], 400);
+                }
+
+                $diceRoll = $this->diceService->roll();
+                $consecutiveSixes = $this->turnManager->updateConsecutiveSixes($diceRoll, $state['consecutive_sixes']);
+
+                $seat = $state['current_turn_seat'];
+                $playerColor = $state['players'][$seat]['color'];
+                $tokens = $state['token_positions'][$playerColor];
+
+                $movableTokens = $this->moveValidator->getMovableTokens($tokens, $diceRoll);
+
+                $state['dice_value'] = $diceRoll;
+                $state['consecutive_sixes'] = $consecutiveSixes;
+                $turnSeconds = (int) ($state['turn_seconds'] ?? 15);
+                $delay = $turnSeconds + 2;
+
+                // Rule: 3 consecutive sixes forfeits turn
+                if ($consecutiveSixes >= TurnManager::MAX_CONSECUTIVE_SIXES) {
+                    $state['can_roll'] = true;
+                    $state['must_move'] = false;
+                    $state['consecutive_sixes'] = 0;
+                    $state['dice_value'] = null;
+
+                    $nextSeat = $this->turnManager->getNextTurn($seat, $state['active_seats'], false);
+                    $state['current_turn_seat'] = $nextSeat;
+                    $state['current_turn_user_id'] = $state['players'][$nextSeat]['user_id'];
+
+                    $this->stateStore->saveState($roomId, $state);
+
+                    broadcast(new DiceRolled($roomId, $seat, $user->id, $diceRoll, []));
+                    broadcast(new TurnChanged($roomId, $nextSeat, $state['current_turn_user_id']));
+
+                    ProcessTurnTimeout::dispatch($roomId, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds($delay));
+
+                    return response()->json([
+                        'status' => 'success',
+                        'message' => '3 consecutive 6s! Turn forfeited.',
+                        'data' => $state,
+                    ]);
+                }
+
+                if (empty($movableTokens)) {
+                    // No legal moves available
+                    $hasExtraTurn = ($diceRoll === 6);
+                    $nextSeat = $this->turnManager->getNextTurn($seat, $state['active_seats'], $hasExtraTurn);
+
+                    $state['can_roll'] = true;
+                    $state['must_move'] = false;
+                    $state['current_turn_seat'] = $nextSeat;
+                    $state['current_turn_user_id'] = $state['players'][$nextSeat]['user_id'];
+
+                    $this->stateStore->saveState($roomId, $state);
+
+                    broadcast(new DiceRolled($roomId, $seat, $user->id, $diceRoll, []));
+                    broadcast(new TurnChanged($roomId, $nextSeat, $state['current_turn_user_id'], $hasExtraTurn));
+
+                    ProcessTurnTimeout::dispatch($roomId, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds($delay));
+
+                    return response()->json([
+                        'status' => 'success',
+                        'message' => 'No legal moves. Turn passed.',
+                        'data' => $state,
+                    ]);
+                }
+
+                $state['can_roll'] = false;
+                $state['must_move'] = true;
+                $this->stateStore->saveState($roomId, $state);
+
+                broadcast(new DiceRolled($roomId, $seat, $user->id, $diceRoll, $movableTokens));
+
+                return response()->json([
+                    'status' => 'success',
+                    'data' => [
+                        'dice_value' => $diceRoll,
+                        'movable_tokens' => $movableTokens,
+                        'game_state' => $state,
+                    ]
+                ]);
+            });
+        } catch (LockTimeoutException $e) {
+            return response()->json(['status' => 'error', 'message' => 'Action in progress, please retry'], 429);
         }
-
-        if ($state['current_turn_user_id'] !== $user->id) {
-            return response()->json(['status' => 'error', 'message' => 'Not your turn'], 403);
-        }
-
-        if (!$state['can_roll']) {
-            return response()->json(['status' => 'error', 'message' => 'Already rolled dice'], 400);
-        }
-
-        $diceRoll = $this->diceService->roll();
-        $consecutiveSixes = $this->turnManager->updateConsecutiveSixes($diceRoll, $state['consecutive_sixes']);
-
-        $seat = $state['current_turn_seat'];
-        $playerColor = $state['players'][$seat]['color'];
-        $tokens = $state['token_positions'][$playerColor];
-
-        $movableTokens = $this->moveValidator->getMovableTokens($tokens, $diceRoll);
-
-        $state['dice_value'] = $diceRoll;
-        $state['consecutive_sixes'] = $consecutiveSixes;
-
-        // Rule: 3 consecutive sixes forfeits turn
-        if ($consecutiveSixes >= TurnManager::MAX_CONSECUTIVE_SIXES) {
-            $state['can_roll'] = true;
-            $state['must_move'] = false;
-            $state['consecutive_sixes'] = 0;
-            $state['dice_value'] = null;
-
-            $nextSeat = $this->turnManager->getNextTurn($seat, $state['active_seats'], false);
-            $state['current_turn_seat'] = $nextSeat;
-            $state['current_turn_user_id'] = $state['players'][$nextSeat]['user_id'];
-
-            $this->stateStore->saveState($roomId, $state);
-
-            broadcast(new DiceRolled($roomId, $seat, $user->id, $diceRoll, []));
-            broadcast(new TurnChanged($roomId, $nextSeat, $state['current_turn_user_id']));
-
-            ProcessTurnTimeout::dispatch($roomId, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds(20));
-
-            return response()->json([
-                'status' => 'success',
-                'message' => '3 consecutive 6s! Turn forfeited.',
-                'data' => $state,
-            ]);
-        }
-
-        if (empty($movableTokens)) {
-            // No legal moves available
-            $hasExtraTurn = ($diceRoll === 6);
-            $nextSeat = $this->turnManager->getNextTurn($seat, $state['active_seats'], $hasExtraTurn);
-
-            $state['can_roll'] = true;
-            $state['must_move'] = false;
-            $state['current_turn_seat'] = $nextSeat;
-            $state['current_turn_user_id'] = $state['players'][$nextSeat]['user_id'];
-
-            $this->stateStore->saveState($roomId, $state);
-
-            broadcast(new DiceRolled($roomId, $seat, $user->id, $diceRoll, []));
-            broadcast(new TurnChanged($roomId, $nextSeat, $state['current_turn_user_id'], $hasExtraTurn));
-
-            ProcessTurnTimeout::dispatch($roomId, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds(20));
-
-            return response()->json([
-                'status' => 'success',
-                'message' => 'No legal moves. Turn passed.',
-                'data' => $state,
-            ]);
-        }
-
-        $state['can_roll'] = false;
-        $state['must_move'] = true;
-        $this->stateStore->saveState($roomId, $state);
-
-        broadcast(new DiceRolled($roomId, $seat, $user->id, $diceRoll, $movableTokens));
-
-        return response()->json([
-            'status' => 'success',
-            'data' => [
-                'dice_value' => $diceRoll,
-                'movable_tokens' => $movableTokens,
-                'game_state' => $state,
-            ]
-        ]);
     }
 
     /**
@@ -233,126 +246,136 @@ class GameController extends Controller
     {
         $user = $request->user();
         $roomId = (int) ($request->quick_match_id ?? $request->room_id);
-        $state = $this->stateStore->getState($roomId);
+        $lock = Cache::lock("ludo:lock:game:{$roomId}", 5);
 
-        if (!$state || $state['status'] !== 'in_progress') {
-            return response()->json(['status' => 'error', 'message' => 'No active match found'], 400);
-        }
+        try {
+            return $lock->block(3, function () use ($request, $roomId, $user) {
+                $state = $this->stateStore->getState($roomId);
 
-        if ($state['current_turn_user_id'] !== $user->id) {
-            return response()->json(['status' => 'error', 'message' => 'Not your turn'], 403);
-        }
+                if (!$state || $state['status'] !== 'in_progress') {
+                    return response()->json(['status' => 'error', 'message' => 'No active match found'], 400);
+                }
 
-        if (!$state['must_move'] || $state['dice_value'] === null) {
-            return response()->json(['status' => 'error', 'message' => 'Roll dice before moving'], 400);
-        }
+                if ($state['current_turn_user_id'] !== $user->id) {
+                    return response()->json(['status' => 'error', 'message' => 'Not your turn'], 403);
+                }
 
-        $seat = $state['current_turn_seat'];
-        $playerColor = $state['players'][$seat]['color'];
-        $tokenIndex = $request->token_index;
-        $diceRoll = $state['dice_value'];
+                if (!$state['must_move'] || $state['dice_value'] === null) {
+                    return response()->json(['status' => 'error', 'message' => 'Roll dice before moving'], 400);
+                }
 
-        $moveResult = $this->moveValidator->validateMove(
-            $state['token_positions'],
-            $playerColor,
-            $tokenIndex,
-            $diceRoll
-        );
+                $seat = $state['current_turn_seat'];
+                $playerColor = $state['players'][$seat]['color'];
+                $tokenIndex = $request->token_index;
+                $diceRoll = $state['dice_value'];
 
-        if (!$moveResult['is_valid']) {
-            return response()->json(['status' => 'error', 'message' => $moveResult['reason']], 400);
-        }
+                $moveResult = $this->moveValidator->validateMove(
+                    $state['token_positions'],
+                    $playerColor,
+                    $tokenIndex,
+                    $diceRoll
+                );
 
-        $state['token_positions'][$playerColor][$tokenIndex] = $moveResult['new_steps'];
+                if (!$moveResult['is_valid']) {
+                    return response()->json(['status' => 'error', 'message' => $moveResult['reason']], 400);
+                }
 
-        if ($moveResult['is_kill']) {
-            foreach ($moveResult['killed_tokens'] as $killed) {
-                $state['token_positions'][$killed['color']][$killed['token_index']] = -1;
-            }
-        }
+                $state['token_positions'][$playerColor][$tokenIndex] = $moveResult['new_steps'];
 
-        GameMove::create([
-            'game_id' => $state['game_id'],
-            'user_id' => $user->id,
-            'token_id' => $tokenIndex,
-            'from_pos' => $moveResult['old_steps'],
-            'to_pos' => $moveResult['new_steps'],
-            'dice_value' => $diceRoll,
-            'is_kill' => $moveResult['is_kill'],
-            'created_at' => now(),
-        ]);
+                if ($moveResult['is_kill']) {
+                    foreach ($moveResult['killed_tokens'] as $killed) {
+                        $state['token_positions'][$killed['color']][$killed['token_index']] = -1;
+                    }
+                }
 
-        broadcast(new TokenMoved(
-            $roomId,
-            $seat,
-            $user->id,
-            $playerColor,
-            $tokenIndex,
-            $moveResult['old_steps'],
-            $moveResult['new_steps'],
-            $moveResult['target_position'],
-            $moveResult['is_kill'],
-            $moveResult['killed_tokens'],
-            $moveResult['reached_home']
-        ));
-
-        // Check WIN condition
-        if ($moveResult['has_won']) {
-            $state['status'] = 'completed';
-            $state['winner_id'] = $user->id;
-            $this->stateStore->saveState($roomId, $state);
-
-            $game = Game::find($state['game_id']);
-            if ($game) {
-                $game->update([
-                    'winner_id' => $user->id,
-                    'status' => GameStatus::COMPLETED->value,
-                    'ended_at' => now(),
+                GameMove::create([
+                    'game_id' => $state['game_id'],
+                    'user_id' => $user->id,
+                    'token_id' => $tokenIndex,
+                    'from_pos' => $moveResult['old_steps'],
+                    'to_pos' => $moveResult['new_steps'],
+                    'dice_value' => $diceRoll,
+                    'is_kill' => $moveResult['is_kill'],
+                    'created_at' => now(),
                 ]);
 
-                app(\App\Services\LeagueService::class)->awardLeaguePoints($game);
-                app(\App\Services\TournamentService::class)->processMatchResult($roomId, $user->id);
-            }
+                broadcast(new TokenMoved(
+                    $roomId,
+                    $seat,
+                    $user->id,
+                    $playerColor,
+                    $tokenIndex,
+                    $moveResult['old_steps'],
+                    $moveResult['new_steps'],
+                    $moveResult['target_position'],
+                    $moveResult['is_kill'],
+                    $moveResult['killed_tokens'],
+                    $moveResult['reached_home']
+                ));
 
-            Room::where('id', $roomId)->update(['status' => RoomStatus::FINISHED->value]);
+                // Check WIN condition
+                if ($moveResult['has_won']) {
+                    $state['status'] = 'completed';
+                    $state['winner_id'] = $user->id;
+                    $this->stateStore->saveState($roomId, $state);
 
-            broadcast(new GameEnded($roomId, $state['game_id'], $user->id, $user->username, 400));
+                    $game = Game::find($state['game_id']);
+                    if ($game) {
+                        $game->update([
+                            'winner_id' => $user->id,
+                            'status' => GameStatus::COMPLETED->value,
+                            'ended_at' => now(),
+                        ]);
 
-            return response()->json([
-                'status' => 'success',
-                'message' => 'Congratulations! You won the game!',
-                'data' => $state,
-            ]);
+                        app(\App\Services\LeagueService::class)->awardLeaguePoints($game);
+                        app(\App\Services\TournamentService::class)->processMatchResult($roomId, $user->id);
+                    }
+
+                    Room::where('id', $roomId)->update(['status' => RoomStatus::FINISHED->value]);
+
+                    broadcast(new GameEnded($roomId, $state['game_id'], $user->id, $user->username, 400));
+
+                    return response()->json([
+                        'status' => 'success',
+                        'message' => 'Congratulations! You won the game!',
+                        'data' => $state,
+                    ]);
+                }
+
+                $grantExtraTurn = $this->turnManager->shouldGrantExtraTurn(
+                    $diceRoll,
+                    $moveResult['is_kill'],
+                    $moveResult['reached_home'],
+                    $state['consecutive_sixes']
+                );
+
+                $nextSeat = $this->turnManager->getNextTurn($seat, $state['active_seats'], $grantExtraTurn);
+
+                $state['can_roll'] = true;
+                $state['must_move'] = false;
+                $state['dice_value'] = null;
+                $state['current_turn_seat'] = $nextSeat;
+                $state['current_turn_user_id'] = $state['players'][$nextSeat]['user_id'];
+                $turnSeconds = (int) ($state['turn_seconds'] ?? 15);
+                $delay = $turnSeconds + 2;
+
+                $this->stateStore->saveState($roomId, $state);
+
+                broadcast(new TurnChanged($roomId, $nextSeat, $state['current_turn_user_id'], $grantExtraTurn));
+
+                ProcessTurnTimeout::dispatch($roomId, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds($delay));
+
+                return response()->json([
+                    'status' => 'success',
+                    'data' => [
+                        'move_result' => $moveResult,
+                        'game_state' => $state,
+                    ]
+                ]);
+            });
+        } catch (LockTimeoutException $e) {
+            return response()->json(['status' => 'error', 'message' => 'Action in progress, please retry'], 429);
         }
-
-        $grantExtraTurn = $this->turnManager->shouldGrantExtraTurn(
-            $diceRoll,
-            $moveResult['is_kill'],
-            $moveResult['reached_home'],
-            $state['consecutive_sixes']
-        );
-
-        $nextSeat = $this->turnManager->getNextTurn($seat, $state['active_seats'], $grantExtraTurn);
-
-        $state['can_roll'] = true;
-        $state['must_move'] = false;
-        $state['dice_value'] = null;
-        $state['current_turn_seat'] = $nextSeat;
-        $state['current_turn_user_id'] = $state['players'][$nextSeat]['user_id'];
-
-        $this->stateStore->saveState($roomId, $state);
-
-        broadcast(new TurnChanged($roomId, $nextSeat, $state['current_turn_user_id'], $grantExtraTurn));
-
-        ProcessTurnTimeout::dispatch($roomId, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds(20));
-
-        return response()->json([
-            'status' => 'success',
-            'data' => [
-                'move_result' => $moveResult,
-                'game_state' => $state,
-            ]
-        ]);
     }
 
     /**
@@ -470,7 +493,8 @@ class GameController extends Controller
             $state['dice_value'] = null;
 
             broadcast(new TurnChanged($roomId, $nextSeat, $state['current_turn_user_id']));
-            ProcessTurnTimeout::dispatch($roomId, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds(20));
+            $turnSeconds = (int) ($state['turn_seconds'] ?? 15);
+            ProcessTurnTimeout::dispatch($roomId, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds($turnSeconds + 2));
         }
 
         $this->stateStore->saveState($roomId, $state);

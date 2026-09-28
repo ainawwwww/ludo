@@ -50,6 +50,7 @@ class RedisGameStateStore
             'can_roll' => true,
             'must_move' => false,
             'consecutive_sixes' => 0,
+            'turn_seconds' => 15,
             'token_positions' => $tokenPositions,
             'players' => $playerSeats,
             'status' => 'in_progress',
