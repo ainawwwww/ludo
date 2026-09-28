@@ -334,9 +334,29 @@ class GameController extends Controller
                         app(\App\Services\TournamentService::class)->processMatchResult($roomId, $user->id);
                     }
 
-                    Room::where('id', $roomId)->update(['status' => RoomStatus::FINISHED->value]);
+                    $room = Room::find($roomId);
+                    if ($room) {
+                        $room->update(['status' => RoomStatus::FINISHED->value]);
+                    }
 
-                    broadcast(new GameEnded($roomId, $state['game_id'], $user->id, $user->username, 400));
+                    $entryFee = (int) ($room?->entry_fee ?? 200);
+                    $maxPlayers = (int) ($room?->max_players ?? 2);
+                    $totalPrize = $entryFee > 0 ? ($entryFee * $maxPlayers) : 0;
+
+                    if ($totalPrize > 0) {
+                        Wallet::where('user_id', $user->id)->increment('coins_balance', $totalPrize);
+
+                        Transaction::create([
+                            'user_id' => $user->id,
+                            'type' => TransactionType::WIN,
+                            'currency_type' => 'coins',
+                            'amount' => $totalPrize,
+                            'reference_id' => (string) $roomId,
+                            'created_at' => now(),
+                        ]);
+                    }
+
+                    broadcast(new GameEnded($roomId, $state['game_id'], $user->id, $user->username, $totalPrize));
 
                     return response()->json([
                         'status' => 'success',
@@ -403,7 +423,7 @@ class GameController extends Controller
         $room = Room::find($roomId);
         $entryFee = (int) ($room?->entry_fee ?? 200);
         $maxPlayers = (int) ($room?->max_players ?? 2);
-        $totalPrize = max(400, $entryFee * $maxPlayers);
+        $totalPrize = $entryFee > 0 ? ($entryFee * $maxPlayers) : 0;
 
         // Find leaver's seat
         $leaverSeat = null;
@@ -452,12 +472,12 @@ class GameController extends Controller
             }
 
             // Award full pot coins to the winning player's wallet
-            if ($winnerId) {
+            if ($winnerId && $totalPrize > 0) {
                 Wallet::where('user_id', $winnerId)->increment('coins_balance', $totalPrize);
 
                 Transaction::create([
                     'user_id' => $winnerId,
-                    'type' => TransactionType::REWARD,
+                    'type' => TransactionType::WIN,
                     'currency_type' => 'coins',
                     'amount' => $totalPrize,
                     'reference_id' => (string) $roomId,

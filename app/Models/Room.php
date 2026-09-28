@@ -31,6 +31,7 @@ class Room extends Model
         'turn_seconds',
         'entry_fee',
         'status',
+        'state_version',
         'created_by',
         'created_at',
     ];
@@ -43,6 +44,7 @@ class Room extends Model
             'is_live' => 'boolean',
             'type' => RoomType::class,
             'status' => RoomStatus::class,
+            'state_version' => 'integer',
             'max_players' => 'integer',
             'turn_seconds' => 'integer',
             'entry_fee' => 'integer',

@@ -17,6 +17,8 @@ return [
 
     'code_length' => 6,
 
+    'waiting_ttl_minutes' => 30,
+
     'join_throttle' => [
         'max_attempts' => 10,
         'decay_seconds' => 60,

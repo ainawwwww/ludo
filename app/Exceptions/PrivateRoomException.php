@@ -10,6 +10,7 @@ class PrivateRoomException extends RuntimeException
         string $message,
         protected string $errorCode,
         int $statusCode = 400,
+        public readonly ?int $roomId = null,
         ?\Throwable $previous = null
     ) {
         parent::__construct($message, $statusCode, $previous);
@@ -18,6 +19,11 @@ class PrivateRoomException extends RuntimeException
     public function getErrorCode(): string
     {
         return $this->errorCode;
+    }
+
+    public function getStatusCode(): int
+    {
+        return $this->getCode();
     }
 
     public static function notFound(string $message = 'Room not found'): self
@@ -55,8 +61,8 @@ class PrivateRoomException extends RuntimeException
         return new self($message, 'PLAYERS_NOT_READY', 400);
     }
 
-    public static function alreadyInRoom(string $message = 'User is already in this room'): self
+    public static function alreadyInRoom(string $message = 'User is already in this room', ?int $roomId = null): self
     {
-        return new self($message, 'ALREADY_IN_ROOM', 409);
+        return new self($message, 'ALREADY_IN_ROOM', 409, $roomId);
     }
 }

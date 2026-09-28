@@ -10,3 +10,4 @@ Artisan::command('inspire', function () {
 
 Schedule::command('leaderboard:recalculate-ranks')->everyTenMinutes();
 Schedule::command('league:process-season-end')->hourly();
+Schedule::command('private-rooms:expire')->everyMinute();

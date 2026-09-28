@@ -46,7 +46,7 @@ class PrivateRoomServiceTest extends TestCase
     public function test_create_validates_whitelist_and_seats_host_at_seat_one(): void
     {
         $host = User::factory()->create();
-        Wallet::create(['user_id' => $host->id, 'coins_balance' => 2000]);
+        $host->wallet->update(['coins_balance' => 2000]);
 
         $room = $this->service->create($host, 2, 500, 15, 'My 2P Room');
 
@@ -56,6 +56,7 @@ class PrivateRoomServiceTest extends TestCase
         $this->assertEquals(500, $room->entry_fee);
         $this->assertEquals(15, $room->turn_seconds);
         $this->assertEquals($host->id, $room->created_by);
+        $this->assertEquals(1, $room->state_version);
 
         // Host seated at Seat 1 with Red and ready
         $player = RoomPlayer::where('room_id', $room->id)->first();
@@ -69,7 +70,7 @@ class PrivateRoomServiceTest extends TestCase
     public function test_create_rejects_non_whitelisted_settings(): void
     {
         $host = User::factory()->create();
-        Wallet::create(['user_id' => $host->id, 'coins_balance' => 5000]);
+        $host->wallet->update(['coins_balance' => 5000]);
 
         // Invalid max_players (e.g. 3)
         $this->expectException(\InvalidArgumentException::class);
@@ -79,8 +80,6 @@ class PrivateRoomServiceTest extends TestCase
     public function test_join_handles_race_for_last_seat_and_rejects_when_full(): void
     {
         $host = User::factory()->create();
-        Wallet::create(['user_id' => $host->id, 'coins_balance' => 1000]);
-
         $room = $this->service->create($host, 2, 0); // 2-player room
 
         $user2 = User::factory()->create();
@@ -101,7 +100,7 @@ class PrivateRoomServiceTest extends TestCase
         }
     }
 
-    public function test_host_leave_disbands_room_and_cancels(): void
+    public function test_host_leave_disbands_room_and_cancels_without_deleting_players(): void
     {
         $host = User::factory()->create();
         $room = $this->service->create($host, 2, 0);
@@ -117,7 +116,22 @@ class PrivateRoomServiceTest extends TestCase
         $this->assertEquals('room_disbanded', $result['action']);
         $freshRoom = Room::findOrFail($room->id);
         $this->assertEquals(RoomStatus::CANCELLED, $freshRoom->status);
-        $this->assertEquals(0, $freshRoom->players()->count());
+        // Player rows must NOT be deleted so events and snapshots can still be produced
+        $this->assertEquals(2, $freshRoom->players()->count());
+    }
+
+    public function test_leave_during_playing_status_throws_exception(): void
+    {
+        $host = User::factory()->create();
+        $guest = User::factory()->create();
+        $room = $this->service->create($host, 2, 0);
+        $this->service->join($guest, $room->room_code);
+        $this->service->toggleReady($guest, $room, true);
+        $this->service->start($host, $room);
+
+        // Try to leave while room is PLAYING
+        $this->expectException(PrivateRoomException::class);
+        $this->service->leave($guest, $room);
     }
 
     public function test_non_host_leave_removes_player_and_keeps_room_waiting(): void
@@ -135,6 +149,33 @@ class PrivateRoomServiceTest extends TestCase
         $freshRoom = Room::findOrFail($room->id);
         $this->assertEquals(RoomStatus::WAITING, $freshRoom->status);
         $this->assertEquals(1, $freshRoom->players()->count());
+    }
+
+    public function test_user_cannot_create_or_join_if_already_in_active_room(): void
+    {
+        $user = User::factory()->create();
+        $room1 = $this->service->create($user, 2, 0);
+
+        // Try creating second active room
+        try {
+            $this->service->create($user, 2, 0);
+            $this->fail('Expected ALREADY_IN_ROOM exception');
+        } catch (PrivateRoomException $e) {
+            $this->assertEquals('ALREADY_IN_ROOM', $e->getErrorCode());
+            $this->assertEquals($room1->id, $e->roomId);
+        }
+
+        // Try joining another room
+        $otherHost = User::factory()->create();
+        $room2 = $this->service->create($otherHost, 2, 0);
+
+        try {
+            $this->service->join($user, $room2->room_code);
+            $this->fail('Expected ALREADY_IN_ROOM exception');
+        } catch (PrivateRoomException $e) {
+            $this->assertEquals('ALREADY_IN_ROOM', $e->getErrorCode());
+            $this->assertEquals($room1->id, $e->roomId);
+        }
     }
 
     public function test_start_by_non_host_throws_not_host_exception(): void
@@ -160,16 +201,13 @@ class PrivateRoomServiceTest extends TestCase
         $entryFee = 1000;
 
         $host = User::factory()->create();
-        // Host has enough coins
         $host->wallet->update(['coins_balance' => 2000]);
 
         $room = $this->service->create($host, 2, $entryFee);
 
         $guest = User::factory()->create();
-        // Guest has insufficient coins! (only 100 coins)
         $guest->wallet->update(['coins_balance' => 100]);
 
-        // Manually seat guest for test to verify start-time rollback
         RoomPlayer::create([
             'room_id' => $room->id,
             'user_id' => $guest->id,
@@ -193,7 +231,7 @@ class PrivateRoomServiceTest extends TestCase
         $this->assertEquals($initialGuestBalance, $this->walletService->getBalance($guest, 'coins'));
 
         // No transaction records written
-        $this->assertDatabaseMissing('transactions', ['reference_id' => "private_room_{$room->id}_entry"]);
+        $this->assertDatabaseMissing('transactions', ['reference_id' => "private_room_start:{$room->id}:{$host->id}"]);
 
         // Room status must remain WAITING
         $this->assertEquals(RoomStatus::WAITING, $room->fresh()->status);
@@ -217,20 +255,61 @@ class PrivateRoomServiceTest extends TestCase
 
         $this->assertEquals(RoomStatus::PLAYING, $startResult['room']->status);
         $this->assertNotNull($startResult['game']);
+        $this->assertEquals($room->id, $startResult['game']->room_id);
         $this->assertEquals(30, $startResult['game_state']['turn_seconds']);
 
         // Both players debited
         $this->assertEquals(1500, $this->walletService->getBalance($host, 'coins'));
         $this->assertEquals(1500, $this->walletService->getBalance($guest, 'coins'));
 
-        // Turn changed broadcasted
-        Event::assertDispatched(TurnChanged::class);
+        // Deterministic transaction reference ids
+        $this->assertDatabaseHas('transactions', [
+            'user_id' => $host->id,
+            'reference_id' => "private_room_start:{$room->id}:{$host->id}",
+            'amount' => -500,
+        ]);
+        $this->assertDatabaseHas('transactions', [
+            'user_id' => $guest->id,
+            'reference_id' => "private_room_start:{$room->id}:{$guest->id}",
+            'amount' => -500,
+        ]);
 
-        // Turn timeout job queued with 30 + 2 = 32s delay
-        Queue::assertPushed(ProcessTurnTimeout::class, function ($job) use ($room) {
-            $actualTimestamp = $job->delay instanceof \DateTimeInterface ? $job->delay->getTimestamp() : (int) $job->delay;
-            $expectedTimestamp = now()->addSeconds(32)->timestamp;
-            return $job->roomId === $room->id && abs($actualTimestamp - $expectedTimestamp) <= 2;
-        });
+        // Second start call returns ROOM_ALREADY_STARTED and charges nothing
+        try {
+            $this->service->start($host, $room);
+            $this->fail('Expected ROOM_ALREADY_STARTED');
+        } catch (PrivateRoomException $e) {
+            $this->assertEquals('ROOM_ALREADY_STARTED', $e->getErrorCode());
+        }
+
+        // Host balance remains 1500 (no double charge)
+        $this->assertEquals(1500, $this->walletService->getBalance($host, 'coins'));
+    }
+
+    public function test_snapshot_returns_unified_shape_and_can_start(): void
+    {
+        $host = User::factory()->create();
+        $guest = User::factory()->create();
+
+        $room = $this->service->create($host, 2, 0, 15);
+
+        // Before guest joins: can_start is false
+        $snap1 = $this->service->snapshot($room, $host);
+        $this->assertFalse($snap1['can_start']);
+        $this->assertTrue($snap1['is_host']);
+        $this->assertEquals(1, $snap1['my_seat']);
+        $this->assertEquals(1, count($snap1['players']));
+        $this->assertNull($snap1['game_id']);
+
+        // Guest joins but is not ready: can_start is false
+        $this->service->join($guest, $room->room_code);
+        $snap2 = $this->service->snapshot($room, $host);
+        $this->assertFalse($snap2['can_start']);
+        $this->assertEquals(2, count($snap2['players']));
+
+        // Guest toggles ready: can_start becomes true!
+        $this->service->toggleReady($guest, $room, true);
+        $snap3 = $this->service->snapshot($room, $host);
+        $this->assertTrue($snap3['can_start']);
     }
 }

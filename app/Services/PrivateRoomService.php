@@ -24,6 +24,19 @@ class PrivateRoomService
     ) {}
 
     /**
+     * Get user's current active private room (waiting or playing), if any.
+     */
+    public function getUserActiveRoom(User|int $user): ?Room
+    {
+        $userId = $user instanceof User ? $user->id : (int) $user;
+
+        return Room::where('type', RoomType::PRIVATE)
+            ->whereIn('status', [RoomStatus::WAITING, RoomStatus::PLAYING])
+            ->whereHas('players', fn($q) => $q->where('user_id', $userId))
+            ->first();
+    }
+
+    /**
      * Create a new private room.
      *
      * @throws PrivateRoomException
@@ -52,6 +65,15 @@ class PrivateRoomService
             throw new InvalidArgumentException("Invalid turn_seconds: {$turnSeconds}. Allowed: " . implode(', ', $allowedTurnSeconds));
         }
 
+        // Rule: A user can be in only ONE active private room
+        $activeRoom = $this->getUserActiveRoom($user);
+        if ($activeRoom !== null) {
+            throw PrivateRoomException::alreadyInRoom(
+                "You are already in an active room ({$activeRoom->room_code})",
+                $activeRoom->id
+            );
+        }
+
         // Pre-check host balance
         if ($entryFee > 0 && $this->walletService->getBalance($user, 'coins') < $entryFee) {
             throw PrivateRoomException::insufficientBalance(
@@ -70,6 +92,7 @@ class PrivateRoomService
                 'entry_fee' => $entryFee,
                 'turn_seconds' => $turnSeconds,
                 'status' => RoomStatus::WAITING->value,
+                'state_version' => 1,
                 'created_by' => $user->id,
                 'created_at' => now(),
             ]);
@@ -115,9 +138,18 @@ class PrivateRoomService
                 throw PrivateRoomException::alreadyStarted('Room is not waiting for players');
             }
 
-            // Check if user is already in the room
+            // Check if user is already in this specific room
             if ($room->players()->where('user_id', $user->id)->exists()) {
-                throw PrivateRoomException::alreadyInRoom();
+                throw PrivateRoomException::alreadyInRoom('You are already in this room', $room->id);
+            }
+
+            // Rule: A user can be in only ONE active private room
+            $activeRoom = $this->getUserActiveRoom($user);
+            if ($activeRoom !== null) {
+                throw PrivateRoomException::alreadyInRoom(
+                    "You are already in an active room ({$activeRoom->room_code})",
+                    $activeRoom->id
+                );
             }
 
             $currentPlayers = $room->players()->lockForUpdate()->get();
@@ -167,7 +199,7 @@ class PrivateRoomService
                 }
             }
 
-            return RoomPlayer::create([
+            $player = RoomPlayer::create([
                 'room_id' => $room->id,
                 'user_id' => $user->id,
                 'seat_position' => $assignedSeat,
@@ -175,12 +207,19 @@ class PrivateRoomService
                 'is_ready' => false,
                 'joined_at' => now(),
             ]);
+
+            $room->state_version = ((int) $room->state_version) + 1;
+            $room->save();
+
+            return $player;
         });
     }
 
     /**
      * Leave a private room.
-     * Host leaving disbands/cancels the room. Non-host leaving frees their seat.
+     * Host leaving disbands/cancels the room (without deleting player records).
+     * Non-host leaving frees their seat.
+     * Cannot leave while match is playing.
      *
      * @throws PrivateRoomException
      */
@@ -198,32 +237,40 @@ class PrivateRoomService
                 throw PrivateRoomException::notFound();
             }
 
+            if ($room->status !== RoomStatus::WAITING) {
+                throw PrivateRoomException::alreadyStarted('Cannot leave a match in progress. Use forfeit instead.');
+            }
+
             $player = $room->players()->where('user_id', $user->id)->first();
             if (!$player) {
                 return ['action' => 'none', 'room_id' => $roomId];
             }
 
-            // If host leaves, cancel room and disband all players
+            // If host leaves, cancel room (preserve player records so snapshots/events can be produced)
             if ($room->created_by === $user->id) {
                 $room->status = RoomStatus::CANCELLED;
+                $room->state_version = ((int) $room->state_version) + 1;
                 $room->save();
-                $room->players()->delete();
 
                 return [
                     'action' => 'room_disbanded',
                     'room_id' => $room->id,
                     'status' => RoomStatus::CANCELLED->value,
+                    'version' => (int) $room->state_version,
                 ];
             }
 
-            // Non-host leaves
+            // Non-host leaves -> delete their player row
             $player->delete();
+            $room->state_version = ((int) $room->state_version) + 1;
+            $room->save();
 
             return [
                 'action' => 'player_left',
                 'room_id' => $room->id,
                 'user_id' => $user->id,
                 'status' => $room->status->value,
+                'version' => (int) $room->state_version,
             ];
         });
     }
@@ -266,13 +313,17 @@ class PrivateRoomService
             $player->is_ready = $isReady !== null ? $isReady : !$player->is_ready;
             $player->save();
 
+            $room->state_version = ((int) $room->state_version) + 1;
+            $room->save();
+
             return $player;
         });
     }
 
     /**
      * Start match in a private room.
-     * Host only, full room, all players ready, atomic entry fee deduction with rollback on failure.
+     * Host only, full room (all seats filled), all guests ready.
+     * Uses deterministic wallet reference IDs; atomic rollback if any player has low balance.
      *
      * @throws PrivateRoomException
      */
@@ -302,10 +353,10 @@ class PrivateRoomService
 
             $players = $room->players()->with('user')->lockForUpdate()->get();
 
-            // Player count check
-            if ($players->count() < $room->max_players) {
+            // Player count check: must be full (2P = 2, 4P = 4)
+            if ($players->count() !== $room->max_players) {
                 throw PrivateRoomException::notEnoughPlayers(
-                    "Need {$room->max_players} players to start, currently have {$players->count()}"
+                    "Need exactly {$room->max_players} players to start, currently have {$players->count()}"
                 );
             }
 
@@ -315,21 +366,22 @@ class PrivateRoomService
                 throw PrivateRoomException::playersNotReady();
             }
 
-            // Deduct entry fee atomically for all players
+            // Deduct entry fee atomically for all players with deterministic reference IDs
             if ($room->entry_fee > 0) {
                 foreach ($players as $p) {
                     $this->walletService->debit(
                         $p->user_id,
                         $room->entry_fee,
-                        "private_room_{$room->id}_entry",
+                        "private_room_start:{$room->id}:{$p->user_id}",
                         TransactionType::ENTRY_FEE,
                         'coins'
                     );
                 }
             }
 
-            // Update room status
+            // Update room status and state version
             $room->status = RoomStatus::PLAYING;
+            $room->state_version = ((int) $room->state_version) + 1;
             $room->save();
 
             // Prepare playerData for GameInitializerService (0-indexed seats)
@@ -365,13 +417,18 @@ class PrivateRoomService
     }
 
     /**
-     * Get room snapshot.
+     * Get unified room snapshot matching the exact required API shape:
+     * id, code, status, max_players, entry_fee, turn_seconds, host_user_id,
+     * players[{user_id, name, avatar, seat, color, is_ready, is_host}],
+     * my_seat, is_host, can_start, game_id (when playing), version.
+     *
+     * @throws PrivateRoomException
      */
     public function snapshot(int|Room $room, ?User $user = null): array
     {
         $roomId = $room instanceof Room ? $room->id : (int) $room;
 
-        $room = Room::with(['creator', 'players.user'])
+        $room = Room::with(['creator', 'players.user', 'game'])
             ->where('id', $roomId)
             ->where('type', RoomType::PRIVATE)
             ->first();
@@ -380,26 +437,43 @@ class PrivateRoomService
             throw PrivateRoomException::notFound();
         }
 
+        $myPlayer = $user ? $room->players->firstWhere('user_id', $user->id) : null;
+        $isHost = $user ? ($user->id === $room->created_by) : false;
+
+        $playersCount = $room->players->count();
+        $allGuestsReady = $room->players
+            ->where('user_id', '!=', $room->created_by)
+            ->where('is_ready', false)
+            ->isEmpty();
+
+        $canStart = ($room->status === RoomStatus::WAITING)
+            && ($playersCount === $room->max_players)
+            && $allGuestsReady;
+
+        $gameId = ($room->status === RoomStatus::PLAYING) ? $room->game?->id : null;
+
         return [
             'id' => $room->id,
-            'room_code' => $room->room_code,
-            'title' => $room->title,
+            'code' => $room->room_code,
             'status' => $room->status->value,
             'max_players' => $room->max_players,
-            'turn_seconds' => $room->turn_seconds,
             'entry_fee' => $room->entry_fee,
-            'host' => [
-                'id' => $room->creator->id,
-                'username' => $room->creator->username,
-            ],
+            'turn_seconds' => $room->turn_seconds,
+            'host_user_id' => $room->created_by,
             'players' => $room->players->map(fn($p) => [
                 'user_id' => $p->user_id,
-                'username' => $p->user->username,
-                'seat_position' => $p->seat_position,
+                'name' => $p->user->username ?? 'Player',
+                'avatar' => $p->user->avatar_url,
+                'seat' => $p->seat_position,
                 'color' => $p->color->value ?? $p->color,
                 'is_ready' => (bool) $p->is_ready,
                 'is_host' => $p->user_id === $room->created_by,
-            ])->toArray(),
+            ])->values()->toArray(),
+            'my_seat' => $myPlayer?->seat_position,
+            'is_host' => $isHost,
+            'can_start' => $canStart,
+            'game_id' => $gameId,
+            'version' => (int) ($room->state_version ?? 0),
         ];
     }
 }
