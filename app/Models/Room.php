@@ -14,7 +14,7 @@ class Room extends Model
 {
     use HasFactory;
 
-    public $timestamps = false;
+    public $timestamps = true;
     protected $table = 'rooms';
 
     protected $fillable = [
@@ -34,6 +34,7 @@ class Room extends Model
         'state_version',
         'created_by',
         'created_at',
+        'updated_at',
     ];
 
     protected function casts(): array
@@ -49,6 +50,7 @@ class Room extends Model
             'turn_seconds' => 'integer',
             'entry_fee' => 'integer',
             'created_at' => 'datetime',
+            'updated_at' => 'datetime',
         ];
     }
 
@@ -65,6 +67,11 @@ class Room extends Model
     public function game(): HasOne
     {
         return $this->hasOne(Game::class, 'room_id');
+    }
+
+    public function games(): HasMany
+    {
+        return $this->hasMany(Game::class, 'room_id');
     }
 
     public function chatMessages(): HasMany

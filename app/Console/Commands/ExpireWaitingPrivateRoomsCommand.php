@@ -33,7 +33,7 @@ class ExpireWaitingPrivateRoomsCommand extends Command
 
         $expiredRooms = Room::where('type', RoomType::PRIVATE)
             ->where('status', RoomStatus::WAITING)
-            ->where('created_at', '<=', $cutoff)
+            ->where('updated_at', '<=', $cutoff)
             ->get();
 
         $count = 0;

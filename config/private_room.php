@@ -19,6 +19,8 @@ return [
 
     'waiting_ttl_minutes' => 30,
 
+    'playing_stuck_hours' => 3,
+
     'join_throttle' => [
         'max_attempts' => 10,
         'decay_seconds' => 60,

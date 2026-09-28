@@ -30,10 +30,28 @@ class PrivateRoomService
     {
         $userId = $user instanceof User ? $user->id : (int) $user;
 
-        return Room::where('type', RoomType::PRIVATE)
+        $room = Room::where('type', RoomType::PRIVATE)
             ->whereIn('status', [RoomStatus::WAITING, RoomStatus::PLAYING])
             ->whereHas('players', fn($q) => $q->where('user_id', $userId))
             ->first();
+
+        if ($room && ($room->status === RoomStatus::PLAYING || $room->status->value === 'playing')) {
+            $hasActiveGame = $room->games()
+                ->where('status', \App\Enums\GameStatus::IN_PROGRESS->value)
+                ->exists();
+            $hasCompletedGame = $room->games()
+                ->where('status', \App\Enums\GameStatus::COMPLETED->value)
+                ->exists();
+
+            if ($hasCompletedGame && !$hasActiveGame) {
+                $room->status = RoomStatus::FINISHED;
+                $room->state_version = ((int) $room->state_version) + 1;
+                $room->save();
+                return null;
+            }
+        }
+
+        return $room;
     }
 
     /**
