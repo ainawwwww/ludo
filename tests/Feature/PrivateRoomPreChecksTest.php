@@ -184,7 +184,7 @@ class PrivateRoomPreChecksTest extends TestCase
         $user1 = User::factory()->create();
         $user2 = User::factory()->create();
 
-        // Stale room: created 35 minutes ago
+        // Stale room: created 35 minutes ago, idle (updated 35 minutes ago)
         $staleRoom = Room::create([
             'room_code' => 'STALE1',
             'type' => RoomType::PRIVATE->value,
@@ -195,6 +195,20 @@ class PrivateRoomPreChecksTest extends TestCase
             'created_by' => $user1->id,
             'created_at' => now()->subMinutes(35),
         ]);
+        Room::where('id', $staleRoom->id)->update(['updated_at' => now()->subMinutes(35)]);
+
+        // Active room created 31 minutes ago but updated 5 minutes ago (active)
+        $activeRoom = Room::create([
+            'room_code' => 'ACTIV1',
+            'type' => RoomType::PRIVATE->value,
+            'max_players' => 2,
+            'entry_fee' => 0,
+            'status' => RoomStatus::WAITING->value,
+            'state_version' => 2,
+            'created_by' => $user1->id,
+            'created_at' => now()->subMinutes(31),
+        ]);
+        Room::where('id', $activeRoom->id)->update(['updated_at' => now()->subMinutes(5)]);
 
         // Fresh room: created 5 minutes ago
         $freshRoom = Room::create([
@@ -207,13 +221,20 @@ class PrivateRoomPreChecksTest extends TestCase
             'created_by' => $user2->id,
             'created_at' => now()->subMinutes(5),
         ]);
+        Room::where('id', $freshRoom->id)->update(['updated_at' => now()->subMinutes(5)]);
 
         $this->artisan('private-rooms:expire')
             ->assertSuccessful();
 
+        // Idle stale room is cancelled
         $this->assertEquals(RoomStatus::CANCELLED, $staleRoom->fresh()->status);
         $this->assertEquals(2, $staleRoom->fresh()->state_version);
 
+        // Room created 31 minutes ago with recent activity is NOT cancelled
+        $this->assertEquals(RoomStatus::WAITING, $activeRoom->fresh()->status);
+        $this->assertEquals(2, $activeRoom->fresh()->state_version);
+
+        // Fresh room is NOT cancelled
         $this->assertEquals(RoomStatus::WAITING, $freshRoom->fresh()->status);
         $this->assertEquals(1, $freshRoom->fresh()->state_version);
     }

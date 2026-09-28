@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Enums\GameStatus;
 use App\Enums\RoomStatus;
+use App\Enums\RoomType;
 
 use App\Events\DiceRolled;
 use App\Events\GameEnded;
@@ -66,6 +67,10 @@ class GameController extends Controller
         }
         $room = Room::with('players.user')->findOrFail($roomId);
 
+        if ($room->type === RoomType::PRIVATE || $room->type === 'private') {
+            return response()->json(['status' => 'error', 'message' => 'Private rooms can only be started via private room endpoint'], 403);
+        }
+
         if ($room->created_by !== $request->user()->id) {
             return response()->json(['status' => 'error', 'message' => 'Only match host can start game'], 403);
         }
@@ -125,6 +130,21 @@ class GameController extends Controller
             return response()->json(['status' => 'error', 'message' => 'Active match state not found'], 404);
         }
 
+        $room = Room::find($roomId);
+        if ($room && ($room->type === RoomType::PRIVATE || $room->type === 'private')) {
+            $user = $request->user();
+            $isParticipant = false;
+            foreach ($state['players'] as $p) {
+                if ((int)$p['user_id'] === (int)$user->id) {
+                    $isParticipant = true;
+                    break;
+                }
+            }
+            if (!$isParticipant) {
+                return response()->json(['status' => 'error', 'message' => 'Active match state not found'], 404);
+            }
+        }
+
         return response()->json([
             'status' => 'success',
             'data' => $state,
@@ -147,6 +167,20 @@ class GameController extends Controller
 
                 if (!$state || $state['status'] !== 'in_progress') {
                     return response()->json(['status' => 'error', 'message' => 'No active match found'], 400);
+                }
+
+                $room = Room::find($roomId);
+                if ($room && ($room->type === RoomType::PRIVATE || $room->type === 'private')) {
+                    $isParticipant = false;
+                    foreach ($state['players'] as $p) {
+                        if ((int)$p['user_id'] === (int)$user->id) {
+                            $isParticipant = true;
+                            break;
+                        }
+                    }
+                    if (!$isParticipant) {
+                        return response()->json(['status' => 'error', 'message' => 'Active match state not found'], 404);
+                    }
                 }
 
                 if ($state['current_turn_user_id'] !== $user->id) {
@@ -259,6 +293,20 @@ class GameController extends Controller
                     return response()->json(['status' => 'error', 'message' => 'No active match found'], 400);
                 }
 
+                $room = Room::find($roomId);
+                if ($room && ($room->type === RoomType::PRIVATE || $room->type === 'private')) {
+                    $isParticipant = false;
+                    foreach ($state['players'] as $p) {
+                        if ((int)$p['user_id'] === (int)$user->id) {
+                            $isParticipant = true;
+                            break;
+                        }
+                    }
+                    if (!$isParticipant) {
+                        return response()->json(['status' => 'error', 'message' => 'Active match state not found'], 404);
+                    }
+                }
+
                 if ($state['current_turn_user_id'] !== $user->id) {
                     return response()->json(['status' => 'error', 'message' => 'Not your turn'], 403);
                 }
@@ -335,28 +383,37 @@ class GameController extends Controller
                     }
 
                     $room = Room::find($roomId);
-                    if ($room) {
+                    $isPrivateRoom = $room && ($room->type === RoomType::PRIVATE || $room->type === 'private');
+
+                    if ($isPrivateRoom) {
                         $room->update(['status' => RoomStatus::FINISHED->value]);
+                        $room->increment('state_version');
+
+                        $entryFee = (int) ($room->entry_fee ?? 0);
+                        $maxPlayers = (int) ($room->max_players ?? 2);
+                        $totalPrize = $entryFee > 0 ? ($entryFee * $maxPlayers) : 0;
+
+                        if ($totalPrize > 0) {
+                            Wallet::where('user_id', $user->id)->increment('coins_balance', $totalPrize);
+
+                            Transaction::create([
+                                'user_id' => $user->id,
+                                'type' => TransactionType::WIN,
+                                'currency_type' => 'coins',
+                                'amount' => $totalPrize,
+                                'reference_id' => (string) $roomId,
+                                'created_at' => now(),
+                            ]);
+                        }
+
+                        broadcast(new GameEnded($roomId, $state['game_id'], $user->id, $user->username, $totalPrize));
+                    } else {
+                        if ($room) {
+                            $room->update(['status' => RoomStatus::FINISHED->value]);
+                        }
+
+                        broadcast(new GameEnded($roomId, $state['game_id'], $user->id, $user->username, 400));
                     }
-
-                    $entryFee = (int) ($room?->entry_fee ?? 200);
-                    $maxPlayers = (int) ($room?->max_players ?? 2);
-                    $totalPrize = $entryFee > 0 ? ($entryFee * $maxPlayers) : 0;
-
-                    if ($totalPrize > 0) {
-                        Wallet::where('user_id', $user->id)->increment('coins_balance', $totalPrize);
-
-                        Transaction::create([
-                            'user_id' => $user->id,
-                            'type' => TransactionType::WIN,
-                            'currency_type' => 'coins',
-                            'amount' => $totalPrize,
-                            'reference_id' => (string) $roomId,
-                            'created_at' => now(),
-                        ]);
-                    }
-
-                    broadcast(new GameEnded($roomId, $state['game_id'], $user->id, $user->username, $totalPrize));
 
                     return response()->json([
                         'status' => 'success',
@@ -421,9 +478,13 @@ class GameController extends Controller
         }
 
         $room = Room::find($roomId);
+        $isPrivateRoom = $room && ($room->type === RoomType::PRIVATE || $room->type === 'private');
+
         $entryFee = (int) ($room?->entry_fee ?? 200);
         $maxPlayers = (int) ($room?->max_players ?? 2);
-        $totalPrize = $entryFee > 0 ? ($entryFee * $maxPlayers) : 0;
+        $totalPrize = $isPrivateRoom
+            ? ($entryFee > 0 ? ($entryFee * $maxPlayers) : 0)
+            : max(400, $entryFee * $maxPlayers);
 
         // Find leaver's seat
         $leaverSeat = null;
@@ -435,6 +496,9 @@ class GameController extends Controller
         }
 
         if ($leaverSeat === null) {
+            if ($isPrivateRoom) {
+                return response()->json(['status' => 'error', 'message' => 'Active match state not found'], 404);
+            }
             return response()->json(['status' => 'error', 'message' => 'You are not a player in this match'], 403);
         }
 
@@ -472,21 +536,41 @@ class GameController extends Controller
             }
 
             // Award full pot coins to the winning player's wallet
-            if ($winnerId && $totalPrize > 0) {
-                Wallet::where('user_id', $winnerId)->increment('coins_balance', $totalPrize);
+            if ($winnerId) {
+                if ($isPrivateRoom) {
+                    if ($totalPrize > 0) {
+                        Wallet::where('user_id', $winnerId)->increment('coins_balance', $totalPrize);
 
-                Transaction::create([
-                    'user_id' => $winnerId,
-                    'type' => TransactionType::WIN,
-                    'currency_type' => 'coins',
-                    'amount' => $totalPrize,
-                    'reference_id' => (string) $roomId,
-                    'created_at' => now(),
-                ]);
-            }
+                        Transaction::create([
+                            'user_id' => $winnerId,
+                            'type' => TransactionType::WIN,
+                            'currency_type' => 'coins',
+                            'amount' => $totalPrize,
+                            'reference_id' => (string) $roomId,
+                            'created_at' => now(),
+                        ]);
+                    }
 
-            if ($room) {
-                $room->update(['status' => RoomStatus::FINISHED->value]);
+                    if ($room) {
+                        $room->update(['status' => RoomStatus::FINISHED->value]);
+                        $room->increment('state_version');
+                    }
+                } else {
+                    Wallet::where('user_id', $winnerId)->increment('coins_balance', $totalPrize);
+
+                    Transaction::create([
+                        'user_id' => $winnerId,
+                        'type' => TransactionType::REWARD,
+                        'currency_type' => 'coins',
+                        'amount' => $totalPrize,
+                        'reference_id' => (string) $roomId,
+                        'created_at' => now(),
+                    ]);
+
+                    if ($room) {
+                        $room->update(['status' => RoomStatus::FINISHED->value]);
+                    }
+                }
             }
 
             // Broadcast real-time events
