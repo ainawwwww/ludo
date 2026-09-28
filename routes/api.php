@@ -12,6 +12,7 @@ use App\Http\Controllers\Api\LeagueController;
 use App\Http\Controllers\Api\LeaderboardController;
 use App\Http\Controllers\Api\LobbyController;
 use App\Http\Controllers\Api\MatchmakingController;
+use App\Http\Controllers\Api\PrivateRoomController;
 use App\Http\Controllers\Api\ProfileController;
 use App\Http\Controllers\Api\QuickMatchChatController;
 use App\Http\Controllers\Api\RoomController;
@@ -154,6 +155,17 @@ Route::prefix('v1')->group(function () {
         Route::post('/rooms/{room}/take-seat', [RoomController::class, 'takeSeat']);
         Route::post('/rooms/{room}/leave-seat', [RoomController::class, 'leaveSeat']);
         Route::post('/rooms/quick-match', [RoomController::class, 'quickMatch']);
+
+        // Private Room Module (Phase 3)
+        Route::prefix('private-rooms')->group(function () {
+            Route::post('/', [PrivateRoomController::class, 'create']);
+            Route::post('/join', [PrivateRoomController::class, 'join'])->middleware('throttle:10,1');
+            Route::get('/current', [PrivateRoomController::class, 'current']);
+            Route::get('/{room}', [PrivateRoomController::class, 'show']);
+            Route::post('/{room}/ready', [PrivateRoomController::class, 'ready']);
+            Route::post('/{room}/leave', [PrivateRoomController::class, 'leave']);
+            Route::post('/{room}/start', [PrivateRoomController::class, 'start']);
+        });
     });
 });
 

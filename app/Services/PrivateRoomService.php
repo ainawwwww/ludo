@@ -368,14 +368,18 @@ class PrivateRoomService
 
             // Deduct entry fee atomically for all players with deterministic reference IDs
             if ($room->entry_fee > 0) {
-                foreach ($players as $p) {
-                    $this->walletService->debit(
-                        $p->user_id,
-                        $room->entry_fee,
-                        "private_room_start:{$room->id}:{$p->user_id}",
-                        TransactionType::ENTRY_FEE,
-                        'coins'
-                    );
+                try {
+                    foreach ($players as $p) {
+                        $this->walletService->debit(
+                            $p->user_id,
+                            $room->entry_fee,
+                            "private_room_start:{$room->id}:{$p->user_id}",
+                            TransactionType::ENTRY_FEE,
+                            'coins'
+                        );
+                    }
+                } catch (\App\Exceptions\InsufficientBalanceException $e) {
+                    throw PrivateRoomException::insufficientBalance($e->getMessage());
                 }
             }
 

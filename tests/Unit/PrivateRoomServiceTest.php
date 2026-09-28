@@ -221,8 +221,8 @@ class PrivateRoomServiceTest extends TestCase
 
         try {
             $this->service->start($host, $room);
-            $this->fail('Expected InsufficientBalanceException');
-        } catch (\App\Exceptions\InsufficientBalanceException $e) {
+            $this->fail('Expected InsufficientBalanceException or PrivateRoomException');
+        } catch (\App\Exceptions\InsufficientBalanceException | \App\Exceptions\PrivateRoomException $e) {
             // Success: caught
         }
 

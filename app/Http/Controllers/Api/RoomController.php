@@ -104,6 +104,14 @@ class RoomController extends Controller
                 ->firstOrFail();
         }
 
+        if ($room->type === RoomType::PRIVATE || $room->type === 'private') {
+            $user = request()->user();
+            $isMember = $user && $room->players->contains('user_id', $user->id);
+            if (!$isMember) {
+                return response()->json(['status' => 'error', 'message' => 'Unauthorized access to private room'], 403);
+            }
+        }
+
         return response()->json([
             'status' => 'success',
             'data' => new RoomResource($room),
@@ -125,6 +133,10 @@ class RoomController extends Controller
         $room = Room::where('room_code', $request->room_code)
             ->where('status', RoomStatus::WAITING->value)
             ->firstOrFail();
+
+        if ($room->type === RoomType::PRIVATE || $room->type === 'private') {
+            return response()->json(['status' => 'error', 'message' => 'Private rooms cannot be joined via public room join'], 403);
+        }
 
         if ($room->players()->count() >= $room->max_players) {
             return response()->json(['status' => 'error', 'message' => 'Room is full'], 409);
@@ -169,6 +181,13 @@ class RoomController extends Controller
         $room = is_numeric($id)
             ? Room::with(['creator', 'players.user'])->findOrFail((int) $id)
             : Room::with(['creator', 'players.user'])->where('room_code', strtoupper($id))->firstOrFail();
+
+        if ($room->type === RoomType::PRIVATE || $room->type === 'private') {
+            $isMember = $room->players->contains('user_id', $user->id);
+            if (!$isMember) {
+                return response()->json(['status' => 'error', 'message' => 'Cannot join private room as listener'], 403);
+            }
+        }
 
         // Auto-assign next available seat if user is not already seated
         if (!$room->players()->where('user_id', $user->id)->exists() && $room->players()->count() < $room->max_players) {
@@ -225,6 +244,13 @@ class RoomController extends Controller
         $room = is_numeric($id)
             ? Room::with(['creator', 'players.user'])->findOrFail((int) $id)
             : Room::with(['creator', 'players.user'])->where('room_code', strtoupper($id))->firstOrFail();
+
+        if ($room->type === RoomType::PRIVATE || $room->type === 'private') {
+            $isMember = $room->players->contains('user_id', $user->id);
+            if (!$isMember) {
+                return response()->json(['status' => 'error', 'message' => 'Cannot take seat in private room via public API'], 403);
+            }
+        }
 
         $seatPosition = (int) $request->input('seat_position', 2);
         if ($seatPosition < 1 || $seatPosition > 8) {
@@ -287,6 +313,13 @@ class RoomController extends Controller
         $room = is_numeric($id)
             ? Room::with(['creator', 'players.user'])->findOrFail((int) $id)
             : Room::with(['creator', 'players.user'])->where('room_code', strtoupper($id))->firstOrFail();
+
+        if ($room->type === RoomType::PRIVATE || $room->type === 'private') {
+            $isMember = $room->players->contains('user_id', $user->id);
+            if (!$isMember) {
+                return response()->json(['status' => 'error', 'message' => 'Cannot modify private room via public API'], 403);
+            }
+        }
 
         // Host cannot vacate Seat 1
         $room->players()->where('user_id', $user->id)->where('seat_position', '!=', 1)->delete();

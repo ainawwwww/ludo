@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Api;
 
 use App\Enums\FriendStatus;
 use App\Enums\RoomStatus;
+use App\Enums\RoomType;
 use App\Http\Controllers\Controller;
 use App\Http\Resources\RoomResource;
 use App\Http\Resources\UserResource;
@@ -67,6 +68,7 @@ class LobbyController extends Controller
 
         // Query recommended rooms
         $query = Room::with(['creator', 'players.user'])
+            ->where('type', '!=', RoomType::PRIVATE->value)
             ->where('is_live', true);
 
         if (!empty($country)) {
@@ -102,6 +104,7 @@ class LobbyController extends Controller
 
         // Popular live hosts (Users who currently host live rooms, ordered by audience size)
         $liveRooms = Room::with(['creator', 'players.user'])
+            ->where('type', '!=', RoomType::PRIVATE->value)
             ->where('is_live', true)
             ->orderBy('member_count', 'desc')
             ->get();
@@ -126,6 +129,7 @@ class LobbyController extends Controller
 
         // Trending live rooms
         $trendingRooms = Room::with(['creator', 'players.user'])
+            ->where('type', '!=', RoomType::PRIVATE->value)
             ->where('is_live', true)
             ->orderBy('member_count', 'desc')
             ->orderBy('id', 'desc')
@@ -156,7 +160,11 @@ class LobbyController extends Controller
         $filter = strtolower($request->query('filter', 'recently'));
         $perPage = min(50, max(1, (int) $request->query('per_page', 15)));
 
-        $query = Room::with(['creator', 'players.user']);
+        $query = Room::with(['creator', 'players.user'])
+            ->where(function ($q) use ($user) {
+                $q->where('type', '!=', RoomType::PRIVATE->value)
+                  ->orWhereHas('players', fn($p) => $p->where('user_id', $user->id));
+            });
 
         switch ($filter) {
             case 'joined':
