@@ -15,11 +15,18 @@ class GameStarted implements ShouldBroadcastNow
 
     public function __construct(
         public int $roomId,
-        public array $gameState
+        public array $gameState,
+        public bool $isPrivate = false
     ) {}
 
     public function broadcastOn(): array
     {
+        if ($this->isPrivate) {
+            return [
+                new PrivateChannel('room.' . $this->roomId),
+            ];
+        }
+
         return [
             new PrivateChannel('room.' . $this->roomId),
             new Channel('room.' . $this->roomId),

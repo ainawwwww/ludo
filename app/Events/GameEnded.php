@@ -18,11 +18,18 @@ class GameEnded implements ShouldBroadcastNow
         public int $gameId,
         public int $winnerId,
         public string $winnerUsername,
-        public int $prizeCoins
+        public int $prizeCoins,
+        public bool $isPrivate = false
     ) {}
 
     public function broadcastOn(): array
     {
+        if ($this->isPrivate) {
+            return [
+                new PrivateChannel('room.' . $this->roomId),
+            ];
+        }
+
         return [
             new PrivateChannel('room.' . $this->roomId),
             new Channel('room.' . $this->roomId),

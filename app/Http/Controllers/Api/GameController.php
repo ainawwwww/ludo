@@ -170,7 +170,8 @@ class GameController extends Controller
                 }
 
                 $room = Room::find($roomId);
-                if ($room && ($room->type === RoomType::PRIVATE || $room->type === 'private')) {
+                $isPrivate = $room && ($room->type === RoomType::PRIVATE || $room->type === 'private');
+                if ($isPrivate) {
                     $isParticipant = false;
                     foreach ($state['players'] as $p) {
                         if ((int)$p['user_id'] === (int)$user->id) {
@@ -219,8 +220,8 @@ class GameController extends Controller
 
                     $this->stateStore->saveState($roomId, $state);
 
-                    broadcast(new DiceRolled($roomId, $seat, $user->id, $diceRoll, []));
-                    broadcast(new TurnChanged($roomId, $nextSeat, $state['current_turn_user_id']));
+                    broadcast(new DiceRolled($roomId, $seat, $user->id, $diceRoll, [], $isPrivate));
+                    broadcast(new TurnChanged($roomId, $nextSeat, $state['current_turn_user_id'], false, $isPrivate));
 
                     ProcessTurnTimeout::dispatch($roomId, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds($delay));
 
@@ -243,8 +244,8 @@ class GameController extends Controller
 
                     $this->stateStore->saveState($roomId, $state);
 
-                    broadcast(new DiceRolled($roomId, $seat, $user->id, $diceRoll, []));
-                    broadcast(new TurnChanged($roomId, $nextSeat, $state['current_turn_user_id'], $hasExtraTurn));
+                    broadcast(new DiceRolled($roomId, $seat, $user->id, $diceRoll, [], $isPrivate));
+                    broadcast(new TurnChanged($roomId, $nextSeat, $state['current_turn_user_id'], $hasExtraTurn, $isPrivate));
 
                     ProcessTurnTimeout::dispatch($roomId, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds($delay));
 
@@ -259,7 +260,7 @@ class GameController extends Controller
                 $state['must_move'] = true;
                 $this->stateStore->saveState($roomId, $state);
 
-                broadcast(new DiceRolled($roomId, $seat, $user->id, $diceRoll, $movableTokens));
+                broadcast(new DiceRolled($roomId, $seat, $user->id, $diceRoll, $movableTokens, $isPrivate));
 
                 return response()->json([
                     'status' => 'success',
@@ -294,7 +295,8 @@ class GameController extends Controller
                 }
 
                 $room = Room::find($roomId);
-                if ($room && ($room->type === RoomType::PRIVATE || $room->type === 'private')) {
+                $isPrivate = $room && ($room->type === RoomType::PRIVATE || $room->type === 'private');
+                if ($isPrivate) {
                     $isParticipant = false;
                     foreach ($state['players'] as $p) {
                         if ((int)$p['user_id'] === (int)$user->id) {
@@ -361,7 +363,8 @@ class GameController extends Controller
                     $moveResult['target_position'],
                     $moveResult['is_kill'],
                     $moveResult['killed_tokens'],
-                    $moveResult['reached_home']
+                    $moveResult['reached_home'],
+                    $isPrivate
                 ));
 
                 // Check WIN condition
@@ -406,7 +409,7 @@ class GameController extends Controller
                             ]);
                         }
 
-                        broadcast(new GameEnded($roomId, $state['game_id'], $user->id, $user->username, $totalPrize));
+                        broadcast(new GameEnded($roomId, $state['game_id'], $user->id, $user->username, $totalPrize, true));
                     } else {
                         if ($room) {
                             $room->update(['status' => RoomStatus::FINISHED->value]);
@@ -442,7 +445,7 @@ class GameController extends Controller
 
                 $this->stateStore->saveState($roomId, $state);
 
-                broadcast(new TurnChanged($roomId, $nextSeat, $state['current_turn_user_id'], $grantExtraTurn));
+                broadcast(new TurnChanged($roomId, $nextSeat, $state['current_turn_user_id'], $grantExtraTurn, $isPrivate));
 
                 ProcessTurnTimeout::dispatch($roomId, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds($delay));
 
@@ -574,8 +577,8 @@ class GameController extends Controller
             }
 
             // Broadcast real-time events
-            broadcast(new GameEnded($roomId, $state['game_id'], $winnerId ?? 0, $winnerUsername, $totalPrize));
-            broadcast(new PlayerForfeited($roomId, $user->id, $user->username, true, $winnerId, $winnerUsername, $totalPrize));
+            broadcast(new GameEnded($roomId, $state['game_id'], $winnerId ?? 0, $winnerUsername, $totalPrize, $isPrivateRoom));
+            broadcast(new PlayerForfeited($roomId, $user->id, $user->username, true, $winnerId, $winnerUsername, $totalPrize, $isPrivateRoom));
 
             return response()->json([
                 'status' => 'success',
@@ -600,7 +603,7 @@ class GameController extends Controller
             $state['must_move'] = false;
             $state['dice_value'] = null;
 
-            broadcast(new TurnChanged($roomId, $nextSeat, $state['current_turn_user_id']));
+            broadcast(new TurnChanged($roomId, $nextSeat, $state['current_turn_user_id'], false, $isPrivateRoom));
             $delay = isset($state['turn_seconds']) && $state['turn_seconds'] !== null
                 ? ((int) $state['turn_seconds'] + 2)
                 : 20;
@@ -609,7 +612,7 @@ class GameController extends Controller
 
         $this->stateStore->saveState($roomId, $state);
 
-        broadcast(new PlayerForfeited($roomId, $user->id, $user->username, false));
+        broadcast(new PlayerForfeited($roomId, $user->id, $user->username, false, null, null, 400, $isPrivateRoom));
 
         return response()->json([
             'status' => 'success',

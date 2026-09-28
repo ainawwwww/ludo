@@ -436,7 +436,7 @@ class PrivateRoomService
             // Broadcast initial turn
             $initialTurnSeat = $gameState['current_turn_seat'] ?? 0;
             $initialUserId = $gameState['current_turn_user_id'] ?? $playerData[0]['user_id'];
-            broadcast(new TurnChanged($room->id, $initialTurnSeat, $initialUserId, false));
+            broadcast(new TurnChanged($room->id, $initialTurnSeat, $initialUserId, false, true));
 
             // Delayed turn timeout job: turn_seconds + 2
             $delay = ((int) ($room->turn_seconds ?? 15)) + 2;

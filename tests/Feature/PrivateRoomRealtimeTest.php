@@ -17,6 +17,7 @@ use App\Models\RoomPlayer;
 use App\Models\User;
 use App\Services\PrivateRoomService;
 use App\Services\WalletService;
+use Database\Seeders\LeagueSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Queue;
@@ -338,39 +339,138 @@ class PrivateRoomRealtimeTest extends TestCase
     }
 
     /**
-     * Test E: Regression test: Quick match and public rooms broadcast legacy events on room.{roomId} unchanged.
+     * Test E: Regression test: Quick match and public rooms broadcast legacy events on room.{roomId} (DUAL channels).
+     * Private rooms broadcast on PrivateChannel ONLY (1 channel, no unauthenticated public channel).
      */
     public function test_quick_match_and_public_room_broadcasts_unchanged(): void
     {
         Queue::fake([ProcessTurnTimeout::class]);
         Event::fake([DiceRolled::class, TokenMoved::class, TurnChanged::class, GameEnded::class]);
 
-        $diceEvent = new DiceRolled(999, 0, 101, 5, [1, 2]);
+        // ---- Public / quick-match: 2 channels ----
+        $diceEvent = new DiceRolled(999, 0, 101, 5, [1, 2], false);
         $channels = $diceEvent->broadcastOn();
         $this->assertCount(2, $channels);
+        $this->assertInstanceOf(\Illuminate\Broadcasting\PrivateChannel::class, $channels[0]);
         $this->assertEquals('private-room.999', $channels[0]->name);
+        $this->assertInstanceOf(\Illuminate\Broadcasting\Channel::class, $channels[1]);
         $this->assertEquals('room.999', $channels[1]->name);
         $this->assertEquals('dice.rolled', $diceEvent->broadcastAs());
 
-        $tokenEvent = new TokenMoved(999, 0, 101, 'red', 0, 0, 5, ['x' => 1, 'y' => 6], false, [], false);
+        $tokenEvent = new TokenMoved(999, 0, 101, 'red', 0, 0, 5, ['x' => 1, 'y' => 6], false, [], false, false);
         $channels = $tokenEvent->broadcastOn();
         $this->assertCount(2, $channels);
         $this->assertEquals('private-room.999', $channels[0]->name);
         $this->assertEquals('room.999', $channels[1]->name);
         $this->assertEquals('token.moved', $tokenEvent->broadcastAs());
 
-        $turnEvent = new TurnChanged(999, 1, 102, false);
+        $turnEvent = new TurnChanged(999, 1, 102, false, false);
         $channels = $turnEvent->broadcastOn();
         $this->assertCount(2, $channels);
         $this->assertEquals('private-room.999', $channels[0]->name);
         $this->assertEquals('room.999', $channels[1]->name);
         $this->assertEquals('turn.changed', $turnEvent->broadcastAs());
 
-        $gameEndedEvent = new GameEnded(999, 42, 101, 'Winner', 400);
+        $gameEndedEvent = new GameEnded(999, 42, 101, 'Winner', 400, false);
         $channels = $gameEndedEvent->broadcastOn();
         $this->assertCount(2, $channels);
         $this->assertEquals('private-room.999', $channels[0]->name);
         $this->assertEquals('room.999', $channels[1]->name);
         $this->assertEquals('game.ended', $gameEndedEvent->broadcastAs());
+
+        // ---- Private room: 1 channel (PrivateChannel ONLY) ----
+        $dicePrivate = new DiceRolled(42, 0, 201, 3, [], true);
+        $privateChannels = $dicePrivate->broadcastOn();
+        $this->assertCount(1, $privateChannels);
+        $this->assertInstanceOf(\Illuminate\Broadcasting\PrivateChannel::class, $privateChannels[0]);
+        $this->assertEquals('private-room.42', $privateChannels[0]->name);
+
+        $tokenPrivate = new TokenMoved(42, 0, 201, 'red', 0, 0, 5, ['x' => 1, 'y' => 6], false, [], false, true);
+        $this->assertCount(1, $tokenPrivate->broadcastOn());
+
+        $turnPrivate = new TurnChanged(42, 1, 202, false, true);
+        $this->assertCount(1, $turnPrivate->broadcastOn());
+
+        $endedPrivate = new GameEnded(42, 10, 201, 'Host', 1000, true);
+        $this->assertCount(1, $endedPrivate->broadcastOn());
+    }
+
+    /**
+     * Test F (Item 6): Real-broadcaster test without Event::fake.
+     * Uses the 'log' driver so events are truly dispatched through the broadcasting pipeline.
+     * Asserts:
+     *  a) join/ready/start each dispatch exactly ONE PrivateRoomUpdated (via Event::listen).
+     *  b) A failed start (insufficient balance on a guest) dispatches ZERO events and leaves the room in WAITING.
+     */
+    public function test_real_broadcaster_dispatches_only_after_commit_and_failed_start_sends_nothing(): void
+    {
+        $this->seed(LeagueSeeder::class);
+        Queue::fake([ProcessTurnTimeout::class]);
+
+        // Configure log broadcaster so we exercise the real broadcast pipeline without Pusher.
+        config([
+            'broadcasting.default' => 'log',
+        ]);
+
+        // ---- Happy path: join -> ready -> start dispatches 3 events ----
+        $host  = User::factory()->create();
+        $guest = User::factory()->create();
+        $host->wallet->update(['coins_balance'  => 5000]);
+        $guest->wallet->update(['coins_balance' => 5000]);
+
+        $dispatched = [];
+        Event::listen(PrivateRoomUpdated::class, function ($e) use (&$dispatched) {
+            $dispatched[] = [$e->reason, $e->version];
+        });
+
+        $room = $this->service->create($host, 2, 500, 15);         // no event on create
+        $this->assertCount(0, $dispatched);
+
+        $this->service->join($guest, $room->room_code);             // reason=joined, v2
+        $this->assertCount(1, $dispatched);
+        $this->assertEquals('joined', $dispatched[0][0]);
+        $this->assertEquals(2, $dispatched[0][1]);
+
+        $this->service->toggleReady($guest, $room->id, true);      // reason=ready, v3
+        $this->assertCount(2, $dispatched);
+        $this->assertEquals('ready', $dispatched[1][0]);
+
+        $this->service->start($host, $room->id);                   // reason=started, v4
+        $this->assertCount(3, $dispatched);
+        $this->assertEquals('started', $dispatched[2][0]);
+        $this->assertEquals(4, $dispatched[2][1]);
+
+        // ---- Failed start: insufficient balance -> zero events, room stays WAITING ----
+        $host2  = User::factory()->create();
+        $broke  = User::factory()->create();
+        $host2->wallet->update(['coins_balance' => 5000]);
+        $broke->wallet->update(['coins_balance' => 5000]); // enough to pass join pre-check
+
+        $dispatched2 = [];
+        Event::listen(PrivateRoomUpdated::class, function ($e) use (&$dispatched2) {
+            $dispatched2[] = $e->reason;
+        });
+
+        $room2 = $this->service->create($host2, 2, 500, 15);
+        $this->service->join($broke, $room2->room_code);   // join succeeds
+        $this->service->toggleReady($broke, $room2->id, true);
+        $dispatchedBeforeFailedStart = count($dispatched2);
+
+        // Drain broke's wallet AFTER join/ready so start debit fails
+        $broke->wallet->update(['coins_balance' => 10]);
+
+        try {
+            $this->service->start($host2, $room2->id);
+            $this->fail('Expected PrivateRoomException for insufficient balance');
+        } catch (\App\Exceptions\PrivateRoomException $e) {
+            // Expected: broke guest has only 10 coins, entry fee is 500
+        }
+
+        // No additional 'started' event dispatched
+        $this->assertCount($dispatchedBeforeFailedStart, $dispatched2);
+        $this->assertNotContains('started', $dispatched2);
+
+        // Room must still be WAITING (transaction rolled back)
+        $this->assertEquals(RoomStatus::WAITING, $room2->fresh()->status);
     }
 }
