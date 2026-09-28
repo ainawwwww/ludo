@@ -6,6 +6,7 @@ use App\Enums\PlayerColor;
 use App\Enums\RoomStatus;
 use App\Enums\RoomType;
 use App\Enums\TransactionType;
+use App\Events\PrivateRoomUpdated;
 use App\Events\TurnChanged;
 use App\Exceptions\PrivateRoomException;
 use App\Jobs\ProcessTurnTimeout;
@@ -229,6 +230,9 @@ class PrivateRoomService
             $room->state_version = ((int) $room->state_version) + 1;
             $room->save();
 
+            $publicSnapshot = $this->publicSnapshot($room);
+            PrivateRoomUpdated::dispatch($room->id, 'joined', $user->id, $publicSnapshot, (int) $room->state_version);
+
             return $player;
         });
     }
@@ -270,6 +274,9 @@ class PrivateRoomService
                 $room->state_version = ((int) $room->state_version) + 1;
                 $room->save();
 
+                $publicSnapshot = $this->publicSnapshot($room);
+                PrivateRoomUpdated::dispatch($room->id, 'cancelled', $user->id, $publicSnapshot, (int) $room->state_version);
+
                 return [
                     'action' => 'room_disbanded',
                     'room_id' => $room->id,
@@ -282,6 +289,9 @@ class PrivateRoomService
             $player->delete();
             $room->state_version = ((int) $room->state_version) + 1;
             $room->save();
+
+            $publicSnapshot = $this->publicSnapshot($room);
+            PrivateRoomUpdated::dispatch($room->id, 'left', $user->id, $publicSnapshot, (int) $room->state_version);
 
             return [
                 'action' => 'player_left',
@@ -333,6 +343,9 @@ class PrivateRoomService
 
             $room->state_version = ((int) $room->state_version) + 1;
             $room->save();
+
+            $publicSnapshot = $this->publicSnapshot($room);
+            PrivateRoomUpdated::dispatch($room->id, 'ready', $user->id, $publicSnapshot, (int) $room->state_version);
 
             return $player;
         });
@@ -430,6 +443,9 @@ class PrivateRoomService
             ProcessTurnTimeout::dispatch($room->id, $initialTurnSeat, $gameState['last_action_at'])
                 ->delay(now()->addSeconds($delay));
 
+            $publicSnapshot = $this->publicSnapshot($room->id);
+            PrivateRoomUpdated::dispatch($room->id, 'started', $user->id, $publicSnapshot, (int) $room->state_version);
+
             return [
                 'room' => $room->fresh(['creator', 'players.user']),
                 'game' => $game,
@@ -439,14 +455,13 @@ class PrivateRoomService
     }
 
     /**
-     * Get unified room snapshot matching the exact required API shape:
-     * id, code, status, max_players, entry_fee, turn_seconds, host_user_id,
-     * players[{user_id, name, avatar, seat, color, is_ready, is_host}],
-     * my_seat, is_host, can_start, game_id (when playing), version.
+     * Get user-agnostic room snapshot (WITHOUT my_seat or is_host).
+     * Exposes unified shape shared across broadcast events and API resources.
+     * Contains NO sensitive user data (tokens, emails, phone numbers).
      *
      * @throws PrivateRoomException
      */
-    public function snapshot(int|Room $room, ?User $user = null): array
+    public function publicSnapshot(int|Room $room): array
     {
         $roomId = $room instanceof Room ? $room->id : (int) $room;
 
@@ -459,25 +474,26 @@ class PrivateRoomService
             throw PrivateRoomException::notFound();
         }
 
-        $myPlayer = $user ? $room->players->firstWhere('user_id', $user->id) : null;
-        $isHost = $user ? ($user->id === $room->created_by) : false;
-
         $playersCount = $room->players->count();
         $allGuestsReady = $room->players
             ->where('user_id', '!=', $room->created_by)
             ->where('is_ready', false)
             ->isEmpty();
 
-        $canStart = ($room->status === RoomStatus::WAITING)
+        $statusStr = $room->status instanceof \BackedEnum ? $room->status->value : (string) $room->status;
+        $isWaiting = ($room->status === RoomStatus::WAITING || $statusStr === 'waiting');
+        $isPlaying = ($room->status === RoomStatus::PLAYING || $statusStr === 'playing');
+
+        $canStart = $isWaiting
             && ($playersCount === $room->max_players)
             && $allGuestsReady;
 
-        $gameId = ($room->status === RoomStatus::PLAYING) ? $room->game?->id : null;
+        $gameId = $isPlaying ? $room->game?->id : null;
 
         return [
             'id' => $room->id,
             'code' => $room->room_code,
-            'status' => $room->status->value,
+            'status' => $statusStr,
             'max_players' => $room->max_players,
             'entry_fee' => $room->entry_fee,
             'turn_seconds' => $room->turn_seconds,
@@ -487,15 +503,33 @@ class PrivateRoomService
                 'name' => $p->user->username ?? 'Player',
                 'avatar' => $p->user->avatar_url,
                 'seat' => $p->seat_position,
-                'color' => $p->color->value ?? $p->color,
+                'color' => $p->color instanceof \BackedEnum ? $p->color->value : (string) $p->color,
                 'is_ready' => (bool) $p->is_ready,
                 'is_host' => $p->user_id === $room->created_by,
             ])->values()->toArray(),
-            'my_seat' => $myPlayer?->seat_position,
-            'is_host' => $isHost,
             'can_start' => $canStart,
             'game_id' => $gameId,
             'version' => (int) ($room->state_version ?? 0),
         ];
+    }
+
+    /**
+     * Get unified room snapshot matching the exact required API shape:
+     * id, code, status, max_players, entry_fee, turn_seconds, host_user_id,
+     * players[{user_id, name, avatar, seat, color, is_ready, is_host}],
+     * my_seat, is_host, can_start, game_id (when playing), version.
+     *
+     * @throws PrivateRoomException
+     */
+    public function snapshot(int|Room $room, ?User $user = null): array
+    {
+        $public = $this->publicSnapshot($room);
+        $myPlayer = $user ? collect($public['players'])->firstWhere('user_id', $user->id) : null;
+        $isHost = $user ? ($user->id === $public['host_user_id']) : false;
+
+        return array_merge($public, [
+            'my_seat' => $myPlayer ? $myPlayer['seat'] : null,
+            'is_host' => $isHost,
+        ]);
     }
 }

@@ -44,10 +44,21 @@ class ExpireStuckPrivateRoomsCommand extends Command
             ->get();
 
         $count = 0;
+        $privateRoomService = app(\App\Services\PrivateRoomService::class);
         foreach ($stuckRooms as $room) {
             $room->status = RoomStatus::FINISHED;
             $room->state_version = ((int) $room->state_version) + 1;
             $room->save();
+
+            $publicSnapshot = $privateRoomService->publicSnapshot($room);
+            \App\Events\PrivateRoomUpdated::dispatch(
+                $room->id,
+                'expired',
+                null,
+                $publicSnapshot,
+                (int) $room->state_version
+            );
+
             $count++;
         }
 
