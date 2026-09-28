@@ -59,7 +59,7 @@ class RoomController extends Controller
             'category' => $request->input('category', 'social'),
             'tags' => $request->input('tags', ['Ludo', 'VIP']),
             'country_code' => $request->input('country_code', $user->country_code ?? 'PK'),
-            'type' => $request->input('type', RoomType::PUBLIC->value),
+            'type' => RoomType::PUBLIC->value,
             'max_players' => $request->input('max_players', 4),
             'entry_fee' => $entryFee,
             'member_count' => 1,
@@ -183,10 +183,7 @@ class RoomController extends Controller
             : Room::with(['creator', 'players.user'])->where('room_code', strtoupper($id))->firstOrFail();
 
         if ($room->type === RoomType::PRIVATE || $room->type === 'private') {
-            $isMember = $room->players->contains('user_id', $user->id);
-            if (!$isMember) {
-                return response()->json(['status' => 'error', 'message' => 'Cannot join private room as listener'], 403);
-            }
+            return response()->json(['status' => 'error', 'message' => 'Cannot join private room as listener'], 403);
         }
 
         // Auto-assign next available seat if user is not already seated
@@ -246,10 +243,7 @@ class RoomController extends Controller
             : Room::with(['creator', 'players.user'])->where('room_code', strtoupper($id))->firstOrFail();
 
         if ($room->type === RoomType::PRIVATE || $room->type === 'private') {
-            $isMember = $room->players->contains('user_id', $user->id);
-            if (!$isMember) {
-                return response()->json(['status' => 'error', 'message' => 'Cannot take seat in private room via public API'], 403);
-            }
+            return response()->json(['status' => 'error', 'message' => 'Cannot take seat in private room via public API'], 403);
         }
 
         $seatPosition = (int) $request->input('seat_position', 2);
@@ -315,10 +309,7 @@ class RoomController extends Controller
             : Room::with(['creator', 'players.user'])->where('room_code', strtoupper($id))->firstOrFail();
 
         if ($room->type === RoomType::PRIVATE || $room->type === 'private') {
-            $isMember = $room->players->contains('user_id', $user->id);
-            if (!$isMember) {
-                return response()->json(['status' => 'error', 'message' => 'Cannot modify private room via public API'], 403);
-            }
+            return response()->json(['status' => 'error', 'message' => 'Cannot modify private room via public API'], 403);
         }
 
         // Host cannot vacate Seat 1

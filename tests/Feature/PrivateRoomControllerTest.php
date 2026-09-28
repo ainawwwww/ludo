@@ -285,11 +285,17 @@ class PrivateRoomControllerTest extends TestCase
             ->assertStatus(200)
             ->assertJsonPath('data.id', $roomId);
 
-        // Non-member gets 403 NOT_A_MEMBER
+        // Non-member gets 404 ROOM_NOT_FOUND so existence does not leak
         $stranger = User::factory()->create();
         $this->actingAs($stranger)->getJson("/api/v1/private-rooms/{$roomId}")
-            ->assertStatus(403)
-            ->assertJson(['error_code' => 'NOT_A_MEMBER']);
+            ->assertStatus(404)
+            ->assertJson(['error_code' => 'ROOM_NOT_FOUND']);
+
+        // Alphanumeric code lookup is rejected with 404 (only numeric ID allowed)
+        $code = $createRes->json('data.code');
+        $this->actingAs($host)->getJson("/api/v1/private-rooms/{$code}")
+            ->assertStatus(404)
+            ->assertJson(['error_code' => 'ROOM_NOT_FOUND']);
     }
 
     /**
@@ -314,10 +320,10 @@ class PrivateRoomControllerTest extends TestCase
         $readyRes->assertStatus(200);
         $this->assertTrue($readyRes->json('data.can_start'));
 
-        // Non-member cannot toggle ready
+        // Non-member cannot toggle ready (404 so existence does not leak)
         $stranger = User::factory()->create();
         $this->actingAs($stranger)->postJson("/api/v1/private-rooms/{$roomId}/ready")
-            ->assertStatus(403);
+            ->assertStatus(404);
     }
 
     /**

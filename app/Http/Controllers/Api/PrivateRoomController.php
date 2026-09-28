@@ -100,7 +100,7 @@ class PrivateRoomController extends Controller
 
             $isMember = $room->players()->where('user_id', $user->id)->exists();
             if (!$isMember) {
-                throw PrivateRoomException::notMember();
+                throw PrivateRoomException::notFound();
             }
 
             $snapshot = $this->privateRoomService->snapshot($room, $user);
@@ -123,7 +123,7 @@ class PrivateRoomController extends Controller
 
             $isMember = $room->players()->where('user_id', $user->id)->exists();
             if (!$isMember) {
-                throw PrivateRoomException::notMember();
+                throw PrivateRoomException::notFound();
             }
 
             $isReady = $request->has('is_ready') ? $request->boolean('is_ready') : null;
@@ -149,7 +149,7 @@ class PrivateRoomController extends Controller
 
             $isMember = $room->players()->where('user_id', $user->id)->exists();
             if (!$isMember) {
-                throw PrivateRoomException::notMember();
+                throw PrivateRoomException::notFound();
             }
 
             $this->privateRoomService->leave($user, $room);
@@ -176,7 +176,7 @@ class PrivateRoomController extends Controller
 
             $isMember = $room->players()->where('user_id', $user->id)->exists();
             if (!$isMember) {
-                throw PrivateRoomException::notMember();
+                throw PrivateRoomException::notFound();
             }
 
             $this->privateRoomService->start($user, $room);
@@ -191,19 +191,20 @@ class PrivateRoomController extends Controller
     }
 
     /**
-     * Helper to resolve private room by numeric ID or alphanumeric code.
+     * Helper to resolve private room strictly by numeric ID.
+     * Alphanumeric codes are rejected with 404 to prevent enumeration.
      *
      * @throws PrivateRoomException
      */
     protected function resolvePrivateRoom(string $idOrCode): Room
     {
-        $query = Room::where('type', RoomType::PRIVATE);
-
-        if (is_numeric($idOrCode)) {
-            $room = $query->where('id', (int) $idOrCode)->first();
-        } else {
-            $room = $query->where('room_code', strtoupper(trim($idOrCode)))->first();
+        if (!ctype_digit((string) $idOrCode)) {
+            throw PrivateRoomException::notFound();
         }
+
+        $room = Room::where('type', RoomType::PRIVATE)
+            ->where('id', (int) $idOrCode)
+            ->first();
 
         if (!$room) {
             throw PrivateRoomException::notFound();
