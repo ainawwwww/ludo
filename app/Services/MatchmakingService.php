@@ -393,17 +393,9 @@ class MatchmakingService
                 $seatPosition++;
             }
 
-            // Create game
-            $game = Game::create([
-                'room_id' => $room->id,
-                'status' => GameStatus::IN_PROGRESS->value,
-                'started_at' => now(),
-                'created_at' => now(),
-            ]);
-
-            // Initialize Redis game state
-            $stateStore = app(RedisGameStateStore::class);
-            $gameState = $stateStore->initializeState($room->id, $game->id, $playerData);
+            // Create game and initialize Redis state via shared GameInitializerService
+            $gameInitializer = app(\App\Services\GameInitializerService::class);
+            [$game, $gameState] = $gameInitializer->initializeGame($room, $playerData);
 
             // Broadcast MatchFound to each matched player's private channel
             foreach ($matchedUsers as $mu) {

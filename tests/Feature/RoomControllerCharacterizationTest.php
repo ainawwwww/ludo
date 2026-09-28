@@ -38,7 +38,7 @@ class RoomControllerCharacterizationTest extends TestCase
      */
     public function test_quick_match_creates_public_playing_room_and_debits_wallets(): void
     {
-        Event::fake([MatchFound::class]);
+        Event::fake([MatchFound::class, \App\Events\TurnChanged::class]);
 
         $user1 = User::factory()->create();
         $user2 = User::factory()->create();
@@ -102,6 +102,34 @@ class RoomControllerCharacterizationTest extends TestCase
             'amount' => -$entryFee,
             'reference_id' => (string) $roomId,
         ]);
+
+        // Verify Game row created
+        $game = \App\Models\Game::where('room_id', $roomId)->first();
+        $this->assertNotNull($game);
+        $this->assertEquals(\App\Enums\GameStatus::IN_PROGRESS, $game->status);
+        $this->assertNotNull($game->started_at);
+
+        // Verify Redis game state
+        $stateStore = app(\App\Services\GameEngine\RedisGameStateStore::class);
+        $state = $stateStore->getState($roomId);
+        $this->assertNotNull($state);
+        $this->assertEquals('in_progress', $state['status']);
+        $this->assertEquals(0, $state['current_turn_seat']);
+        $this->assertEquals($user1->id, $state['current_turn_user_id']);
+        $this->assertCount(2, $state['players']);
+
+        // Verify events broadcasted
+        Event::assertDispatched(MatchFound::class, 2);
+        Event::assertDispatched(\App\Events\TurnChanged::class, function ($event) use ($roomId, $user1) {
+            return $event->roomId === $roomId && $event->currentTurnUserId === $user1->id && $event->currentTurnSeat === 0;
+        });
+
+        // Verify ProcessTurnTimeout queued with 15s delay
+        Queue::assertPushed(ProcessTurnTimeout::class, function ($job) use ($roomId) {
+            $actualTimestamp = $job->delay instanceof \DateTimeInterface ? $job->delay->getTimestamp() : (int) $job->delay;
+            $expectedTimestamp = now()->addSeconds(15)->timestamp;
+            return $job->roomId === $roomId && abs($actualTimestamp - $expectedTimestamp) <= 2;
+        });
     }
 
     /**
