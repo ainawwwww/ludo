@@ -161,6 +161,7 @@ Route::prefix('v1')->group(function () {
             Route::post('/', [PrivateRoomController::class, 'create']);
             Route::post('/join', [PrivateRoomController::class, 'join'])->middleware('throttle:10,1');
             Route::get('/current', [PrivateRoomController::class, 'current']);
+            Route::get('/active', [PrivateRoomController::class, 'current']);
             Route::get('/{room}', [PrivateRoomController::class, 'show']);
             Route::post('/{room}/ready', [PrivateRoomController::class, 'ready']);
             Route::post('/{room}/leave', [PrivateRoomController::class, 'leave']);
