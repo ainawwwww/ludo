@@ -9,14 +9,14 @@ Broadcast::channel('App.Models.User.{id}', function ($user, $id) {
     return (int) $user->id === (int) $id;
 });
 
-// Game-event WebSocket channel authorization (type-aware)
+// Game-event WebSocket channel authorization (type-aware for private & vip)
 Broadcast::channel('room.{roomId}', function ($user, $roomId) {
     $room = \App\Models\Room::find($roomId);
     if (!$room) {
         return true;
     }
 
-    if ($room->type === \App\Enums\RoomType::PRIVATE || $room->type === 'private') {
+    if ($room->isPrivateOrVip()) {
         return $room->players()->where('user_id', $user->id)->exists();
     }
 
@@ -24,10 +24,10 @@ Broadcast::channel('room.{roomId}', function ($user, $roomId) {
     return true;
 });
 
-// Private room lobby WebSocket channel authorization (members only, private rooms only)
+// Private & VIP room lobby WebSocket channel authorization (members only)
 Broadcast::channel('room-lobby.{roomId}', function ($user, $roomId) {
     $room = \App\Models\Room::find($roomId);
-    if (!$room || ($room->type !== \App\Enums\RoomType::PRIVATE && $room->type !== 'private')) {
+    if (!$room || !$room->isPrivateOrVip()) {
         return false;
     }
 

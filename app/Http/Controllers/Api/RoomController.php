@@ -104,7 +104,7 @@ class RoomController extends Controller
                 ->firstOrFail();
         }
 
-        if ($room->type === RoomType::PRIVATE || $room->type === 'private') {
+        if ($room->isPrivateOrVip()) {
             $user = request()->user();
             $isMember = $user && $room->players->contains('user_id', $user->id);
             if (!$isMember) {
@@ -134,7 +134,7 @@ class RoomController extends Controller
             ->where('status', RoomStatus::WAITING->value)
             ->firstOrFail();
 
-        if ($room->type === RoomType::PRIVATE || $room->type === 'private') {
+        if ($room->isPrivateOrVip()) {
             return response()->json(['status' => 'error', 'message' => 'Private rooms cannot be joined via public room join'], 403);
         }
 
@@ -182,7 +182,7 @@ class RoomController extends Controller
             ? Room::with(['creator', 'players.user'])->findOrFail((int) $id)
             : Room::with(['creator', 'players.user'])->where('room_code', strtoupper($id))->firstOrFail();
 
-        if ($room->type === RoomType::PRIVATE || $room->type === 'private') {
+        if ($room->isPrivateOrVip()) {
             return response()->json(['status' => 'error', 'message' => 'Cannot join private room as listener'], 403);
         }
 
@@ -242,7 +242,7 @@ class RoomController extends Controller
             ? Room::with(['creator', 'players.user'])->findOrFail((int) $id)
             : Room::with(['creator', 'players.user'])->where('room_code', strtoupper($id))->firstOrFail();
 
-        if ($room->type === RoomType::PRIVATE || $room->type === 'private') {
+        if ($room->isPrivateOrVip()) {
             return response()->json(['status' => 'error', 'message' => 'Cannot take seat in private room via public API'], 403);
         }
 
@@ -308,7 +308,7 @@ class RoomController extends Controller
             ? Room::with(['creator', 'players.user'])->findOrFail((int) $id)
             : Room::with(['creator', 'players.user'])->where('room_code', strtoupper($id))->firstOrFail();
 
-        if ($room->type === RoomType::PRIVATE || $room->type === 'private') {
+        if ($room->isPrivateOrVip()) {
             return response()->json(['status' => 'error', 'message' => 'Cannot modify private room via public API'], 403);
         }
 

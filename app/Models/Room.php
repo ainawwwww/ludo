@@ -79,6 +79,12 @@ class Room extends Model
         return $this->hasMany(ChatMessage::class, 'room_id');
     }
 
+    public function isPrivateOrVip(): bool
+    {
+        $val = $this->type instanceof RoomType ? $this->type->value : (string) $this->type;
+        return $val === RoomType::PRIVATE->value || $val === RoomType::VIP->value || $val === 'private' || $val === 'vip';
+    }
+
     public function visits(): HasMany
     {
         return $this->hasMany(RoomVisit::class, 'room_id');

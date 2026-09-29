@@ -68,7 +68,7 @@ class LobbyController extends Controller
 
         // Query recommended rooms
         $query = Room::with(['creator', 'players.user'])
-            ->where('type', '!=', RoomType::PRIVATE->value)
+            ->whereNotIn('type', [RoomType::PRIVATE->value, RoomType::VIP->value])
             ->where('is_live', true);
 
         if (!empty($country)) {
@@ -104,7 +104,7 @@ class LobbyController extends Controller
 
         // Popular live hosts (Users who currently host live rooms, ordered by audience size)
         $liveRooms = Room::with(['creator', 'players.user'])
-            ->where('type', '!=', RoomType::PRIVATE->value)
+            ->whereNotIn('type', [RoomType::PRIVATE->value, RoomType::VIP->value])
             ->where('is_live', true)
             ->orderBy('member_count', 'desc')
             ->get();
@@ -129,7 +129,7 @@ class LobbyController extends Controller
 
         // Trending live rooms
         $trendingRooms = Room::with(['creator', 'players.user'])
-            ->where('type', '!=', RoomType::PRIVATE->value)
+            ->whereNotIn('type', [RoomType::PRIVATE->value, RoomType::VIP->value])
             ->where('is_live', true)
             ->orderBy('member_count', 'desc')
             ->orderBy('id', 'desc')
@@ -162,7 +162,7 @@ class LobbyController extends Controller
 
         $query = Room::with(['creator', 'players.user'])
             ->where(function ($q) use ($user) {
-                $q->where('type', '!=', RoomType::PRIVATE->value)
+                $q->whereNotIn('type', [RoomType::PRIVATE->value, RoomType::VIP->value])
                   ->orWhereHas('players', fn($p) => $p->where('user_id', $user->id));
             });
 

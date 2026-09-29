@@ -88,4 +88,9 @@ class PrivateRoomException extends RuntimeException
     {
         return new self($message, 'INVALID_SETTINGS', 422);
     }
+
+    public static function vipSubscriptionRequired(string $message = 'Active VIP subscription required to create a VIP room'): self
+    {
+        return new self($message, 'VIP_SUBSCRIPTION_REQUIRED', 403);
+    }
 }

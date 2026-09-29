@@ -61,7 +61,7 @@ class ProcessTurnTimeout implements ShouldQueue
                 $delaySite2 = $hasExplicitTurn ? ((int) $state['turn_seconds'] + 2) : 17;
 
                 $room = Room::find($this->roomId);
-                $isPrivate = $room && ($room->type === RoomType::PRIVATE || $room->type === 'private');
+                $isPrivate = $room ? $room->isPrivateOrVip() : false;
 
                 // 1. If player hasn't rolled yet -> timeout expired! Forfeit turn and pass directly to next player (NO AUTO-ROLL)
                 if ($state['can_roll']) {

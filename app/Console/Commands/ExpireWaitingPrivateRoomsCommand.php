@@ -31,7 +31,7 @@ class ExpireWaitingPrivateRoomsCommand extends Command
         $ttlMinutes = (int) config('private_room.waiting_ttl_minutes', 30);
         $cutoff = now()->subMinutes($ttlMinutes);
 
-        $expiredRooms = Room::where('type', RoomType::PRIVATE)
+        $expiredRooms = Room::whereIn('type', [RoomType::PRIVATE, RoomType::VIP])
             ->where('status', RoomStatus::WAITING)
             ->where('updated_at', '<=', $cutoff)
             ->get();

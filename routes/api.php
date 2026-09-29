@@ -13,6 +13,8 @@ use App\Http\Controllers\Api\LeaderboardController;
 use App\Http\Controllers\Api\LobbyController;
 use App\Http\Controllers\Api\MatchmakingController;
 use App\Http\Controllers\Api\PrivateRoomController;
+use App\Http\Controllers\Api\SubscriptionController;
+use App\Http\Controllers\Api\VipRoomController;
 use App\Http\Controllers\Api\ProfileController;
 use App\Http\Controllers\Api\QuickMatchChatController;
 use App\Http\Controllers\Api\RoomController;
@@ -166,6 +168,27 @@ Route::prefix('v1')->group(function () {
             Route::post('/{room}/ready', [PrivateRoomController::class, 'ready']);
             Route::post('/{room}/leave', [PrivateRoomController::class, 'leave']);
             Route::post('/{room}/start', [PrivateRoomController::class, 'start']);
+        });
+
+        // VIP Room Module (Milestone 1)
+        Route::prefix('vip-rooms')->group(function () {
+            Route::post('/', [VipRoomController::class, 'create']);
+            Route::post('/join', [VipRoomController::class, 'join'])->middleware('throttle:10,1');
+            Route::get('/current', [VipRoomController::class, 'current']);
+            Route::get('/active', [VipRoomController::class, 'current']);
+            Route::get('/{room}', [VipRoomController::class, 'show']);
+            Route::post('/{room}/ready', [VipRoomController::class, 'ready']);
+            Route::post('/{room}/leave', [VipRoomController::class, 'leave']);
+            Route::post('/{room}/start', [VipRoomController::class, 'start']);
+        });
+
+        // VIP Subscription Module (Milestone 2)
+        Route::prefix('subscription')->group(function () {
+            Route::get('/plans', [SubscriptionController::class, 'plans']);
+            Route::get('/current', [SubscriptionController::class, 'current']);
+            Route::post('/checkout', [SubscriptionController::class, 'checkout'])->middleware('throttle:5,1');
+            Route::post('/cancel', [SubscriptionController::class, 'cancel']);
+            Route::post('/claim-daily-reward', [SubscriptionController::class, 'claimDailyReward']);
         });
     });
 });

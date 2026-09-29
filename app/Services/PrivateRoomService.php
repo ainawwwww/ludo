@@ -21,20 +21,32 @@ class PrivateRoomService
     public function __construct(
         protected WalletService $walletService,
         protected RoomCodeGenerator $codeGenerator,
-        protected GameInitializerService $gameInitializerService
+        protected GameInitializerService $gameInitializerService,
+        protected SubscriptionService $subscriptionService
     ) {}
 
+    protected function getConfigPrefix(RoomType $roomType): string
+    {
+        return $roomType === RoomType::VIP ? 'vip_room' : 'private_room';
+    }
+
     /**
-     * Get user's current active private room (waiting or playing), if any.
+     * Get user's current active private/vip room (waiting or playing), if any.
      */
-    public function getUserActiveRoom(User|int $user): ?Room
+    public function getUserActiveRoom(User|int $user, ?RoomType $roomType = null): ?Room
     {
         $userId = $user instanceof User ? $user->id : (int) $user;
 
-        $room = Room::where('type', RoomType::PRIVATE)
-            ->whereIn('status', [RoomStatus::WAITING, RoomStatus::PLAYING])
-            ->whereHas('players', fn($q) => $q->where('user_id', $userId))
-            ->first();
+        $query = Room::whereIn('status', [RoomStatus::WAITING, RoomStatus::PLAYING])
+            ->whereHas('players', fn($q) => $q->where('user_id', $userId));
+
+        if ($roomType !== null) {
+            $query->where('type', $roomType);
+        } else {
+            $query->whereIn('type', [RoomType::PRIVATE, RoomType::VIP]);
+        }
+
+        $room = $query->first();
 
         if ($room && ($room->status === RoomStatus::PLAYING || $room->status->value === 'playing')) {
             $hasActiveGame = $room->games()
@@ -56,7 +68,7 @@ class PrivateRoomService
     }
 
     /**
-     * Create a new private room.
+     * Create a new room (private or vip).
      *
      * @throws PrivateRoomException
      * @throws InvalidArgumentException
@@ -66,25 +78,33 @@ class PrivateRoomService
         int $maxPlayers,
         int $entryFee,
         ?int $turnSeconds = null,
-        ?string $title = null
+        ?string $title = null,
+        RoomType $roomType = RoomType::PRIVATE
     ): Room {
-        $allowedMaxPlayers = config('private_room.allowed_max_players', [2, 4]);
+        if ($roomType === RoomType::VIP) {
+            if (!$this->subscriptionService->hasActiveVip($user)) {
+                throw PrivateRoomException::vipSubscriptionRequired();
+            }
+        }
+        $configKey = $this->getConfigPrefix($roomType);
+        $allowedMaxPlayers = config("{$configKey}.allowed_max_players", [2, 4]);
         if (!in_array($maxPlayers, $allowedMaxPlayers, true)) {
             throw new InvalidArgumentException("Invalid max_players: {$maxPlayers}. Allowed: " . implode(', ', $allowedMaxPlayers));
         }
 
-        $allowedFees = config('private_room.allowed_entry_fees', [0, 500, 1000, 5000]);
+        $defaultFees = $roomType === RoomType::VIP ? [1000, 5000, 10000, 25000] : [0, 500, 1000, 5000];
+        $allowedFees = config("{$configKey}.allowed_entry_fees", $defaultFees);
         if (!in_array($entryFee, $allowedFees, true)) {
             throw new InvalidArgumentException("Invalid entry_fee: {$entryFee}. Allowed: " . implode(', ', $allowedFees));
         }
 
-        $turnSeconds = $turnSeconds ?? config('private_room.default_turn_seconds', 15);
-        $allowedTurnSeconds = config('private_room.allowed_turn_seconds', [10, 15, 30]);
+        $turnSeconds = $turnSeconds ?? config("{$configKey}.default_turn_seconds", 15);
+        $allowedTurnSeconds = config("{$configKey}.allowed_turn_seconds", [10, 15, 30]);
         if (!in_array($turnSeconds, $allowedTurnSeconds, true)) {
             throw new InvalidArgumentException("Invalid turn_seconds: {$turnSeconds}. Allowed: " . implode(', ', $allowedTurnSeconds));
         }
 
-        // Rule: A user can be in only ONE active private room
+        // Rule: A user can be in only ONE active room
         $activeRoom = $this->getUserActiveRoom($user);
         if ($activeRoom !== null) {
             throw PrivateRoomException::alreadyInRoom(
@@ -102,11 +122,11 @@ class PrivateRoomService
 
         $code = $this->codeGenerator->generateUnique();
 
-        return DB::transaction(function () use ($user, $code, $maxPlayers, $entryFee, $turnSeconds, $title) {
+        return DB::transaction(function () use ($user, $code, $maxPlayers, $entryFee, $turnSeconds, $title, $roomType) {
             $room = Room::create([
                 'room_code' => $code,
                 'title' => $title ?? "{$user->username}'s Room",
-                'type' => RoomType::PRIVATE->value,
+                'type' => $roomType->value,
                 'max_players' => $maxPlayers,
                 'entry_fee' => $entryFee,
                 'turn_seconds' => $turnSeconds,
@@ -131,26 +151,27 @@ class PrivateRoomService
     }
 
     /**
-     * Join an existing private room by room code.
+     * Join an existing room by room code.
      *
      * @throws PrivateRoomException
      */
-    public function join(User $user, string $roomCode): RoomPlayer
+    public function join(User $user, string $roomCode, RoomType $roomType = RoomType::PRIVATE): RoomPlayer
     {
         $normalizedCode = strtoupper(trim($roomCode));
         if (!$this->codeGenerator->isValid($normalizedCode)) {
             throw PrivateRoomException::notFound('Invalid room code format');
         }
 
-        return DB::transaction(function () use ($user, $normalizedCode) {
+        return DB::transaction(function () use ($user, $normalizedCode, $roomType) {
             // Find and lock room row
             $room = Room::where('room_code', $normalizedCode)
-                ->where('type', RoomType::PRIVATE)
+                ->where('type', $roomType)
                 ->lockForUpdate()
                 ->first();
 
             if (!$room) {
-                throw PrivateRoomException::notFound("Private room with code {$normalizedCode} not found");
+                $typeName = ucfirst($roomType->value);
+                throw PrivateRoomException::notFound("{$typeName} room with code {$normalizedCode} not found");
             }
 
             if ($room->status !== RoomStatus::WAITING) {
@@ -162,7 +183,7 @@ class PrivateRoomService
                 throw PrivateRoomException::alreadyInRoom('You are already in this room', $room->id);
             }
 
-            // Rule: A user can be in only ONE active private room
+            // Rule: A user can be in only ONE active room
             $activeRoom = $this->getUserActiveRoom($user);
             if ($activeRoom !== null) {
                 throw PrivateRoomException::alreadyInRoom(
@@ -238,20 +259,20 @@ class PrivateRoomService
     }
 
     /**
-     * Leave a private room.
+     * Leave a room (private or vip).
      * Host leaving disbands/cancels the room (without deleting player records).
      * Non-host leaving frees their seat.
      * Cannot leave while match is playing.
      *
      * @throws PrivateRoomException
      */
-    public function leave(User $user, int|Room $room): array
+    public function leave(User $user, int|Room $room, RoomType $roomType = RoomType::PRIVATE): array
     {
         $roomId = $room instanceof Room ? $room->id : (int) $room;
 
-        return DB::transaction(function () use ($user, $roomId) {
+        return DB::transaction(function () use ($user, $roomId, $roomType) {
             $room = Room::where('id', $roomId)
-                ->where('type', RoomType::PRIVATE)
+                ->where('type', $roomType)
                 ->lockForUpdate()
                 ->first();
 
@@ -308,13 +329,13 @@ class PrivateRoomService
      *
      * @throws PrivateRoomException
      */
-    public function toggleReady(User $user, int|Room $room, ?bool $isReady = null): RoomPlayer
+    public function toggleReady(User $user, int|Room $room, ?bool $isReady = null, RoomType $roomType = RoomType::PRIVATE): RoomPlayer
     {
         $roomId = $room instanceof Room ? $room->id : (int) $room;
 
-        return DB::transaction(function () use ($user, $roomId, $isReady) {
+        return DB::transaction(function () use ($user, $roomId, $isReady, $roomType) {
             $room = Room::where('id', $roomId)
-                ->where('type', RoomType::PRIVATE)
+                ->where('type', $roomType)
                 ->lockForUpdate()
                 ->first();
 
@@ -352,19 +373,19 @@ class PrivateRoomService
     }
 
     /**
-     * Start match in a private room.
+     * Start match in a room.
      * Host only, full room (all seats filled), all guests ready.
      * Uses deterministic wallet reference IDs; atomic rollback if any player has low balance.
      *
      * @throws PrivateRoomException
      */
-    public function start(User $user, int|Room $room): array
+    public function start(User $user, int|Room $room, RoomType $roomType = RoomType::PRIVATE): array
     {
         $roomId = $room instanceof Room ? $room->id : (int) $room;
 
-        return DB::transaction(function () use ($user, $roomId) {
+        return DB::transaction(function () use ($user, $roomId, $roomType) {
             $room = Room::where('id', $roomId)
-                ->where('type', RoomType::PRIVATE)
+                ->where('type', $roomType)
                 ->lockForUpdate()
                 ->first();
 
@@ -400,11 +421,12 @@ class PrivateRoomService
             // Deduct entry fee atomically for all players with deterministic reference IDs
             if ($room->entry_fee > 0) {
                 try {
+                    $prefix = $roomType === RoomType::VIP ? 'vip_room_start' : 'private_room_start';
                     foreach ($players as $p) {
                         $this->walletService->debit(
                             $p->user_id,
                             $room->entry_fee,
-                            "private_room_start:{$room->id}:{$p->user_id}",
+                            "{$prefix}:{$room->id}:{$p->user_id}",
                             TransactionType::ENTRY_FEE,
                             'coins'
                         );
@@ -461,14 +483,20 @@ class PrivateRoomService
      *
      * @throws PrivateRoomException
      */
-    public function publicSnapshot(int|Room $room): array
+    public function publicSnapshot(int|Room $room, ?RoomType $roomType = null): array
     {
         $roomId = $room instanceof Room ? $room->id : (int) $room;
 
-        $room = Room::with(['creator', 'players.user', 'game'])
-            ->where('id', $roomId)
-            ->where('type', RoomType::PRIVATE)
-            ->first();
+        $query = Room::with(['creator', 'players.user', 'game'])
+            ->where('id', $roomId);
+
+        if ($roomType !== null) {
+            $query->where('type', $roomType);
+        } else {
+            $query->whereIn('type', [RoomType::PRIVATE, RoomType::VIP]);
+        }
+
+        $room = $query->first();
 
         if (!$room) {
             throw PrivateRoomException::notFound();
@@ -521,9 +549,9 @@ class PrivateRoomService
      *
      * @throws PrivateRoomException
      */
-    public function snapshot(int|Room $room, ?User $user = null): array
+    public function snapshot(int|Room $room, ?User $user = null, ?RoomType $roomType = null): array
     {
-        $public = $this->publicSnapshot($room);
+        $public = $this->publicSnapshot($room, $roomType);
         $myPlayer = $user ? collect($public['players'])->firstWhere('user_id', $user->id) : null;
         $isHost = $user ? ($user->id === $public['host_user_id']) : false;
 

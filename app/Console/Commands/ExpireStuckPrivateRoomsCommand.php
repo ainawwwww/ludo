@@ -33,7 +33,7 @@ class ExpireStuckPrivateRoomsCommand extends Command
         $cutoff = now()->subHours($stuckHours);
 
         // Find playing rooms that have completed games OR have been inactive for $stuckHours
-        $stuckRooms = Room::where('type', RoomType::PRIVATE)
+        $stuckRooms = Room::whereIn('type', [RoomType::PRIVATE, RoomType::VIP])
             ->where('status', RoomStatus::PLAYING)
             ->where(function ($query) use ($cutoff) {
                 $query->whereHas('games', function ($q) {

@@ -39,7 +39,8 @@ class PrivateRoomServiceTest extends TestCase
         $this->service = new PrivateRoomService(
             $this->walletService,
             new RoomCodeGenerator(),
-            app(GameInitializerService::class)
+            app(GameInitializerService::class),
+            app(\App\Services\SubscriptionService::class)
         );
     }
 

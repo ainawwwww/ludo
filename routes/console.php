@@ -12,3 +12,5 @@ Schedule::command('leaderboard:recalculate-ranks')->everyTenMinutes();
 Schedule::command('league:process-season-end')->hourly();
 Schedule::command('private-rooms:expire')->everyMinute();
 Schedule::command('private-rooms:expire-stuck')->everyFiveMinutes();
+Schedule::command('vip:credit-daily-rewards')->dailyAt('00:05');
+Schedule::command('vip:process-renewals')->hourly();

@@ -67,7 +67,7 @@ class GameController extends Controller
         }
         $room = Room::with('players.user')->findOrFail($roomId);
 
-        if ($room->type === RoomType::PRIVATE || $room->type === 'private') {
+        if ($room->isPrivateOrVip()) {
             return response()->json(['status' => 'error', 'message' => 'Private rooms can only be started via private room endpoint'], 403);
         }
 
@@ -100,7 +100,7 @@ class GameController extends Controller
 
         $gameState = $this->stateStore->initializeState($room->id, $game->id, $playerData);
 
-        $isPrivate = ($room->type === RoomType::PRIVATE || $room->type === 'private');
+        $isPrivate = $room ? $room->isPrivateOrVip() : false;
 
         // Explicit WebSocket Broadcast
         broadcast(new GameStarted($room->id, $gameState, $isPrivate));
@@ -133,7 +133,7 @@ class GameController extends Controller
         }
 
         $room = Room::find($roomId);
-        if ($room && ($room->type === RoomType::PRIVATE || $room->type === 'private')) {
+        if ($room && $room->isPrivateOrVip()) {
             $user = $request->user();
             $isParticipant = false;
             foreach ($state['players'] as $p) {
@@ -172,7 +172,7 @@ class GameController extends Controller
                 }
 
                 $room = Room::find($roomId);
-                $isPrivate = $room && ($room->type === RoomType::PRIVATE || $room->type === 'private');
+                $isPrivate = $room ? $room->isPrivateOrVip() : false;
                 if ($isPrivate) {
                     $isParticipant = false;
                     foreach ($state['players'] as $p) {
@@ -297,7 +297,7 @@ class GameController extends Controller
                 }
 
                 $room = Room::find($roomId);
-                $isPrivate = $room && ($room->type === RoomType::PRIVATE || $room->type === 'private');
+                $isPrivate = $room ? $room->isPrivateOrVip() : false;
                 if ($isPrivate) {
                     $isParticipant = false;
                     foreach ($state['players'] as $p) {
@@ -388,7 +388,7 @@ class GameController extends Controller
                     }
 
                     $room = Room::find($roomId);
-                    $isPrivateRoom = $room && ($room->type === RoomType::PRIVATE || $room->type === 'private');
+                    $isPrivateRoom = $room ? $room->isPrivateOrVip() : false;
 
                     if ($isPrivateRoom) {
                         $room->update(['status' => RoomStatus::FINISHED->value]);
@@ -486,7 +486,7 @@ class GameController extends Controller
         }
 
         $room = Room::find($roomId);
-        $isPrivateRoom = $room && ($room->type === RoomType::PRIVATE || $room->type === 'private');
+        $isPrivateRoom = $room ? $room->isPrivateOrVip() : false;
 
         $entryFee = (int) ($room?->entry_fee ?? 200);
         $maxPlayers = (int) ($room?->max_players ?? 2);
