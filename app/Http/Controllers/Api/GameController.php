@@ -396,7 +396,10 @@ class GameController extends Controller
 
                         $entryFee = (int) ($room->entry_fee ?? 0);
                         $maxPlayers = (int) ($room->max_players ?? 2);
-                        $totalPrize = $entryFee > 0 ? ($entryFee * $maxPlayers) : 0;
+                        $rawPot = $entryFee > 0 ? ($entryFee * $maxPlayers) : 0;
+                        $cutPct = (float) config('private_room.platform_cut_percentage', 0);
+                        $platformCut = (int) floor($rawPot * ($cutPct / 100.0));
+                        $totalPrize = max(0, $rawPot - $platformCut);
 
                         if ($totalPrize > 0) {
                             Wallet::where('user_id', $user->id)->increment('coins_balance', $totalPrize);
@@ -487,9 +490,14 @@ class GameController extends Controller
 
         $entryFee = (int) ($room?->entry_fee ?? 200);
         $maxPlayers = (int) ($room?->max_players ?? 2);
-        $totalPrize = $isPrivateRoom
-            ? ($entryFee > 0 ? ($entryFee * $maxPlayers) : 0)
-            : max(400, $entryFee * $maxPlayers);
+        if ($isPrivateRoom) {
+            $rawPot = $entryFee > 0 ? ($entryFee * $maxPlayers) : 0;
+            $cutPct = (float) config('private_room.platform_cut_percentage', 0);
+            $platformCut = (int) floor($rawPot * ($cutPct / 100.0));
+            $totalPrize = max(0, $rawPot - $platformCut);
+        } else {
+            $totalPrize = max(400, $entryFee * $maxPlayers);
+        }
 
         // Find leaver's seat
         $leaverSeat = null;

@@ -25,4 +25,6 @@ return [
         'max_attempts' => 10,
         'decay_seconds' => 60,
     ],
+
+    'platform_cut_percentage' => 0,
 ];
