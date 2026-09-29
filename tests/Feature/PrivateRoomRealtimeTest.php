@@ -7,6 +7,8 @@ use App\Enums\RoomStatus;
 use App\Enums\RoomType;
 use App\Events\DiceRolled;
 use App\Events\GameEnded;
+use App\Events\GameStarted;
+use App\Events\PlayerForfeited;
 use App\Events\PrivateRoomUpdated;
 use App\Events\TokenMoved;
 use App\Events\TurnChanged;
@@ -472,5 +474,117 @@ class PrivateRoomRealtimeTest extends TestCase
 
         // Room must still be WAITING (transaction rolled back)
         $this->assertEquals(RoomStatus::WAITING, $room2->fresh()->status);
+    }
+
+    /**
+     * Item 5 tests: 1 test per event type verifying private room events never broadcast to public channel.
+     */
+    public function test_private_room_dice_rolled_event_never_broadcasts_to_public_channel(): void
+    {
+        $roomId = 777;
+        $event = new DiceRolled($roomId, 0, 101, 6, [0], isPrivate: true);
+        $channels = $event->broadcastOn();
+
+        $this->assertCount(1, $channels);
+        $this->assertInstanceOf(\Illuminate\Broadcasting\PrivateChannel::class, $channels[0]);
+        $this->assertEquals('private-room.' . $roomId, $channels[0]->name);
+        foreach ($channels as $channel) {
+            $this->assertNotEquals(\Illuminate\Broadcasting\Channel::class, get_class($channel));
+            $this->assertStringStartsWith('private-', $channel->name);
+        }
+
+        // Regression: public room dispatches both
+        $publicEvent = new DiceRolled($roomId, 0, 101, 6, [0], isPrivate: false);
+        $this->assertCount(2, $publicEvent->broadcastOn());
+    }
+
+    public function test_private_room_token_moved_event_never_broadcasts_to_public_channel(): void
+    {
+        $roomId = 778;
+        $event = new TokenMoved($roomId, 0, 101, 'red', 0, 0, 6, ['x' => 1, 'y' => 6], false, [], false, isPrivate: true);
+        $channels = $event->broadcastOn();
+
+        $this->assertCount(1, $channels);
+        $this->assertInstanceOf(\Illuminate\Broadcasting\PrivateChannel::class, $channels[0]);
+        $this->assertEquals('private-room.' . $roomId, $channels[0]->name);
+        foreach ($channels as $channel) {
+            $this->assertNotEquals(\Illuminate\Broadcasting\Channel::class, get_class($channel));
+            $this->assertStringStartsWith('private-', $channel->name);
+        }
+
+        $publicEvent = new TokenMoved($roomId, 0, 101, 'red', 0, 0, 6, ['x' => 1, 'y' => 6], false, [], false, isPrivate: false);
+        $this->assertCount(2, $publicEvent->broadcastOn());
+    }
+
+    public function test_private_room_turn_changed_event_never_broadcasts_to_public_channel(): void
+    {
+        $roomId = 779;
+        $event = new TurnChanged($roomId, 1, 102, false, isPrivate: true);
+        $channels = $event->broadcastOn();
+
+        $this->assertCount(1, $channels);
+        $this->assertInstanceOf(\Illuminate\Broadcasting\PrivateChannel::class, $channels[0]);
+        $this->assertEquals('private-room.' . $roomId, $channels[0]->name);
+        foreach ($channels as $channel) {
+            $this->assertNotEquals(\Illuminate\Broadcasting\Channel::class, get_class($channel));
+            $this->assertStringStartsWith('private-', $channel->name);
+        }
+
+        $publicEvent = new TurnChanged($roomId, 1, 102, false, isPrivate: false);
+        $this->assertCount(2, $publicEvent->broadcastOn());
+    }
+
+    public function test_private_room_game_ended_event_never_broadcasts_to_public_channel(): void
+    {
+        $roomId = 780;
+        $event = new GameEnded($roomId, 1, 101, 'Winner', 1000, isPrivate: true);
+        $channels = $event->broadcastOn();
+
+        $this->assertCount(1, $channels);
+        $this->assertInstanceOf(\Illuminate\Broadcasting\PrivateChannel::class, $channels[0]);
+        $this->assertEquals('private-room.' . $roomId, $channels[0]->name);
+        foreach ($channels as $channel) {
+            $this->assertNotEquals(\Illuminate\Broadcasting\Channel::class, get_class($channel));
+            $this->assertStringStartsWith('private-', $channel->name);
+        }
+
+        $publicEvent = new GameEnded($roomId, 1, 101, 'Winner', 400, isPrivate: false);
+        $this->assertCount(2, $publicEvent->broadcastOn());
+    }
+
+    public function test_private_room_game_started_event_never_broadcasts_to_public_channel(): void
+    {
+        $roomId = 781;
+        $event = new GameStarted($roomId, ['status' => 'in_progress'], isPrivate: true);
+        $channels = $event->broadcastOn();
+
+        $this->assertCount(1, $channels);
+        $this->assertInstanceOf(\Illuminate\Broadcasting\PrivateChannel::class, $channels[0]);
+        $this->assertEquals('private-room.' . $roomId, $channels[0]->name);
+        foreach ($channels as $channel) {
+            $this->assertNotEquals(\Illuminate\Broadcasting\Channel::class, get_class($channel));
+            $this->assertStringStartsWith('private-', $channel->name);
+        }
+
+        $publicEvent = new GameStarted($roomId, ['status' => 'in_progress'], isPrivate: false);
+        $this->assertCount(2, $publicEvent->broadcastOn());
+    }
+
+    public function test_private_room_player_forfeited_event_never_broadcasts_to_public_channel(): void
+    {
+        $roomId = 782;
+        $event = new PlayerForfeited($roomId, 101, 'Leaver', true, 102, 'Winner', 1000, isPrivate: true);
+        $channels = $event->broadcastOn();
+
+        $this->assertCount(1, $channels);
+        $this->assertInstanceOf(\Illuminate\Broadcasting\PrivateChannel::class, $channels[0]);
+        $this->assertEquals('private-room.' . $roomId, $channels[0]->name);
+        foreach ($channels as $channel) {
+            $this->assertNotEquals(\Illuminate\Broadcasting\Channel::class, get_class($channel));
+            $this->assertStringStartsWith('private-', $channel->name);
+        }
+
+        $publicEvent = new PlayerForfeited($roomId, 101, 'Leaver', true, 102, 'Winner', 400, isPrivate: false);
+        $this->assertCount(2, $publicEvent->broadcastOn());
     }
 }

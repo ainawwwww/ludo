@@ -100,8 +100,10 @@ class GameController extends Controller
 
         $gameState = $this->stateStore->initializeState($room->id, $game->id, $playerData);
 
+        $isPrivate = ($room->type === RoomType::PRIVATE || $room->type === 'private');
+
         // Explicit WebSocket Broadcast
-        broadcast(new GameStarted($room->id, $gameState));
+        broadcast(new GameStarted($room->id, $gameState, $isPrivate));
 
         // Dispatch turn timeout job: 20s default, or turn_seconds + 2 if explicitly set
         $delay = isset($gameState['turn_seconds']) && $gameState['turn_seconds'] !== null

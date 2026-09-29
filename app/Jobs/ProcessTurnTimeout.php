@@ -5,6 +5,8 @@ namespace App\Jobs;
 use App\Events\DiceRolled;
 use App\Events\TokenMoved;
 use App\Events\TurnChanged;
+use App\Enums\RoomType;
+use App\Models\Room;
 use App\Services\GameEngine\DiceService;
 use App\Services\GameEngine\MoveValidator;
 use App\Services\GameEngine\RedisGameStateStore;
@@ -58,6 +60,9 @@ class ProcessTurnTimeout implements ShouldQueue
                 $delaySite1 = $hasExplicitTurn ? ((int) $state['turn_seconds'] + 2) : 15;
                 $delaySite2 = $hasExplicitTurn ? ((int) $state['turn_seconds'] + 2) : 17;
 
+                $room = Room::find($this->roomId);
+                $isPrivate = $room && ($room->type === RoomType::PRIVATE || $room->type === 'private');
+
                 // 1. If player hasn't rolled yet -> timeout expired! Forfeit turn and pass directly to next player (NO AUTO-ROLL)
                 if ($state['can_roll']) {
                     $nextSeat = $turnManager->getNextTurn($seat, $state['active_seats'], false);
@@ -71,7 +76,7 @@ class ProcessTurnTimeout implements ShouldQueue
 
                     $stateStore->saveState($this->roomId, $state);
 
-                    broadcast(new TurnChanged($this->roomId, $nextSeat, $state['current_turn_user_id'], false));
+                    broadcast(new TurnChanged($this->roomId, $nextSeat, $state['current_turn_user_id'], false, $isPrivate));
 
                     // Dispatch delayed turn timeout job for next player
                     self::dispatch($this->roomId, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds($delaySite1));
@@ -106,7 +111,8 @@ class ProcessTurnTimeout implements ShouldQueue
                         $moveResult['target_position'],
                         $moveResult['is_kill'],
                         $moveResult['killed_tokens'],
-                        $moveResult['reached_home']
+                        $moveResult['reached_home'],
+                        $isPrivate
                     ));
                 }
 
@@ -123,7 +129,7 @@ class ProcessTurnTimeout implements ShouldQueue
 
                 $stateStore->saveState($this->roomId, $state);
 
-                broadcast(new TurnChanged($this->roomId, $nextSeat, $state['current_turn_user_id'], $grantExtra));
+                broadcast(new TurnChanged($this->roomId, $nextSeat, $state['current_turn_user_id'], $grantExtra, $isPrivate));
 
                 self::dispatch($this->roomId, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds($delaySite2));
             });
