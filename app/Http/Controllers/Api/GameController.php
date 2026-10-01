@@ -98,7 +98,8 @@ class GameController extends Controller
             ];
         }
 
-        $gameState = $this->stateStore->initializeState($room->id, $game->id, $playerData);
+        $roomType = $room->type instanceof RoomType ? $room->type->value : (string) ($room->type ?? 'public');
+        $gameState = $this->stateStore->initializeState($room->id, $game->id, $playerData, $roomType);
 
         $isPrivate = $room ? $room->isPrivateOrVip() : false;
 
@@ -324,11 +325,14 @@ class GameController extends Controller
                 $tokenIndex = $request->token_index;
                 $diceRoll = $state['dice_value'];
 
+                $roomType = $state['room_type'] ?? ($room ? ($room->type instanceof RoomType ? $room->type->value : (string) $room->type) : 'public');
+
                 $moveResult = $this->moveValidator->validateMove(
                     $state['token_positions'],
                     $playerColor,
                     $tokenIndex,
-                    $diceRoll
+                    $diceRoll,
+                    $roomType
                 );
 
                 if (!$moveResult['is_valid']) {
@@ -388,9 +392,50 @@ class GameController extends Controller
                     }
 
                     $room = Room::find($roomId);
-                    $isPrivateRoom = $room ? $room->isPrivateOrVip() : false;
+                    $roomTypeVal = $room ? ($room->type instanceof RoomType ? $room->type->value : (string) $room->type) : 'public';
+                    $isTeamRoom = ($roomTypeVal === RoomType::TEAM->value || $roomTypeVal === 'team');
 
-                    if ($isPrivateRoom) {
+                    if ($isTeamRoom) {
+                        if ($room) {
+                            $room->update(['status' => RoomStatus::FINISHED->value]);
+                            $room->increment('state_version');
+                        }
+
+                        $entryFee = (int) ($room->entry_fee ?? 100);
+                        $rawPot = $entryFee * 4;
+                        $cutPct = (float) config('private_room.platform_cut_percentage', 0);
+                        $platformCut = (int) floor($rawPot * ($cutPct / 100.0));
+                        $totalPrize = max(0, $rawPot - $platformCut);
+                        $sharePerTeammate = (int) floor($totalPrize / 2);
+
+                        $movingTeam = \App\Support\TeamAssignment::teamForColor($playerColor);
+
+                        $winningUserIds = [];
+                        foreach ($state['players'] as $p) {
+                            $pColor = strtolower($p['color']);
+                            if (\App\Support\TeamAssignment::teamForColor($pColor) === $movingTeam) {
+                                $winningUserIds[] = (int) $p['user_id'];
+                            }
+                        }
+                        $winningUserIds = array_unique($winningUserIds);
+
+                        if ($sharePerTeammate > 0) {
+                            foreach ($winningUserIds as $winnerUserId) {
+                                Wallet::where('user_id', $winnerUserId)->increment('coins_balance', $sharePerTeammate);
+
+                                Transaction::create([
+                                    'user_id' => $winnerUserId,
+                                    'type' => TransactionType::WIN,
+                                    'currency_type' => 'coins',
+                                    'amount' => $sharePerTeammate,
+                                    'reference_id' => (string) $roomId,
+                                    'created_at' => now(),
+                                ]);
+                            }
+                        }
+
+                        broadcast(new GameEnded($roomId, $state['game_id'], $user->id, $user->username, $totalPrize, true));
+                    } elseif ($room && $room->isPrivateOrVip()) {
                         $room->update(['status' => RoomStatus::FINISHED->value]);
                         $room->increment('state_version');
 
@@ -513,6 +558,83 @@ class GameController extends Controller
                 return response()->json(['status' => 'error', 'message' => 'Active match state not found'], 404);
             }
             return response()->json(['status' => 'error', 'message' => 'You are not a player in this match'], 403);
+        }
+
+        $roomTypeVal = $room ? ($room->type instanceof RoomType ? $room->type->value : (string) $room->type) : 'public';
+        $isTeamRoom = ($roomTypeVal === RoomType::TEAM->value || $roomTypeVal === 'team');
+
+        if ($isTeamRoom) {
+            // Team Mode Forfeit: Entire leaver team forfeits, opposing team wins and splits pot 50/50!
+            $leaverColor = strtolower($state['players'][$leaverSeat]['color']);
+            $leaverTeam = \App\Support\TeamAssignment::teamForColor($leaverColor);
+            $opposingTeam = ($leaverTeam === 1) ? 2 : 1;
+
+            $winningUserIds = [];
+            $winnerUsername = 'Opposing Team';
+            foreach ($state['players'] as $p) {
+                $pColor = strtolower($p['color']);
+                if (\App\Support\TeamAssignment::teamForColor($pColor) === $opposingTeam) {
+                    $winningUserIds[] = (int) $p['user_id'];
+                    $winnerUsername = $p['username'];
+                }
+            }
+            $winningUserIds = array_unique($winningUserIds);
+            $primaryWinnerId = reset($winningUserIds) ?: null;
+
+            $state['status'] = 'completed';
+            $state['winner_id'] = $primaryWinnerId;
+            $this->stateStore->saveState($roomId, $state);
+
+            $game = Game::find($state['game_id']);
+            if ($game) {
+                $game->update([
+                    'winner_id' => $primaryWinnerId,
+                    'status' => GameStatus::COMPLETED->value,
+                    'ended_at' => now(),
+                ]);
+            }
+
+            if ($room) {
+                $room->update(['status' => RoomStatus::FINISHED->value]);
+                $room->increment('state_version');
+            }
+
+            $entryFee = (int) ($room->entry_fee ?? 100);
+            $rawPot = $entryFee * 4;
+            $cutPct = (float) config('private_room.platform_cut_percentage', 0);
+            $platformCut = (int) floor($rawPot * ($cutPct / 100.0));
+            $totalPrize = max(0, $rawPot - $platformCut);
+            $sharePerTeammate = (int) floor($totalPrize / 2);
+
+            if ($sharePerTeammate > 0) {
+                foreach ($winningUserIds as $winnerUserId) {
+                    Wallet::where('user_id', $winnerUserId)->increment('coins_balance', $sharePerTeammate);
+
+                    Transaction::create([
+                        'user_id' => $winnerUserId,
+                        'type' => TransactionType::WIN,
+                        'currency_type' => 'coins',
+                        'amount' => $sharePerTeammate,
+                        'reference_id' => (string) $roomId,
+                        'created_at' => now(),
+                    ]);
+                }
+            }
+
+            broadcast(new GameEnded($roomId, $state['game_id'], $primaryWinnerId ?? 0, $winnerUsername, $totalPrize, true));
+            broadcast(new PlayerForfeited($roomId, $user->id, $user->username, true, $primaryWinnerId, $winnerUsername, $totalPrize, true));
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Team forfeited the match. Opposing team awarded victory.',
+                'data' => [
+                    'is_game_over' => true,
+                    'winner_id' => $primaryWinnerId,
+                    'winner_username' => $winnerUsername,
+                    'prize_coins' => $totalPrize,
+                    'game_state' => $state,
+                ],
+            ]);
         }
 
         // Remove leaver from active seats

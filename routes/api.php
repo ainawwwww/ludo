@@ -15,6 +15,7 @@ use App\Http\Controllers\Api\MatchmakingController;
 use App\Http\Controllers\Api\PrivateRoomController;
 use App\Http\Controllers\Api\SubscriptionController;
 use App\Http\Controllers\Api\VipRoomController;
+use App\Http\Controllers\Api\TeamRoomController;
 use App\Http\Controllers\Api\ProfileController;
 use App\Http\Controllers\Api\QuickMatchChatController;
 use App\Http\Controllers\Api\RoomController;
@@ -156,6 +157,7 @@ Route::prefix('v1')->group(function () {
         Route::post('/rooms/{room}/seat', [RoomController::class, 'takeSeat']);
         Route::post('/rooms/{room}/take-seat', [RoomController::class, 'takeSeat']);
         Route::post('/rooms/{room}/leave-seat', [RoomController::class, 'leaveSeat']);
+        Route::post('/rooms/{room}/leave', [RoomController::class, 'leave']);
         Route::post('/rooms/quick-match', [RoomController::class, 'quickMatch']);
 
         // Private Room Module (Phase 3)
@@ -180,6 +182,20 @@ Route::prefix('v1')->group(function () {
             Route::post('/{room}/ready', [VipRoomController::class, 'ready']);
             Route::post('/{room}/leave', [VipRoomController::class, 'leave']);
             Route::post('/{room}/start', [VipRoomController::class, 'start']);
+        });
+
+        // Team Room Module (2v2 Party Lobby & Matchmaking)
+        Route::prefix('team-rooms')->group(function () {
+            Route::post('/', [TeamRoomController::class, 'create']);
+            Route::post('/create', [TeamRoomController::class, 'create']);
+            Route::post('/join', [TeamRoomController::class, 'join'])->middleware('throttle:10,1');
+            Route::post('/join-solo', [TeamRoomController::class, 'joinSolo']);
+            Route::get('/current', [TeamRoomController::class, 'current']);
+            Route::get('/active', [TeamRoomController::class, 'current']);
+            Route::get('/{code}', [TeamRoomController::class, 'show']);
+            Route::post('/leave', [TeamRoomController::class, 'leave']);
+            Route::post('/ready', [TeamRoomController::class, 'ready']);
+            Route::post('/ready-for-match', [TeamRoomController::class, 'readyForMatch']);
         });
 
         // VIP Subscription Module (Milestone 2)

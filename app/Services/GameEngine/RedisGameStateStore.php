@@ -13,7 +13,7 @@ class RedisGameStateStore
     /**
      * Initialize live game match state in Redis.
      */
-    public function initializeState(int $roomId, int $gameId, array $players): array
+    public function initializeState(int $roomId, int $gameId, array $players, string $roomType = 'public'): array
     {
         $tokenPositions = [];
         $playerSeats = [];
@@ -43,6 +43,7 @@ class RedisGameStateStore
             'quick_match_id' => $roomId,
             'room_id' => $roomId,
             'game_id' => $gameId,
+            'room_type' => $roomType,
             'current_turn_seat' => $initialTurnSeat,
             'current_turn_user_id' => $initialUserId,
             'active_seats' => $activeSeats,

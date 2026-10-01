@@ -28,7 +28,8 @@ class MoveValidator
         array $allPlayerTokens,
         string $movingColor,
         int $tokenIndex,
-        int $diceValue
+        int $diceValue,
+        string $roomType = 'public'
     ): array {
         $movingColor = strtolower($movingColor);
 
@@ -84,6 +85,11 @@ class MoveValidator
                     continue; // Cannot kill own tokens
                 }
 
+                // 2v2 Team Mode: friendly-fire protection (cannot kill teammate tokens)
+                if (strtolower($roomType) === 'team' && \App\Support\TeamAssignment::areColorsTeammates($movingColor, $color)) {
+                    continue;
+                }
+
                 foreach ($tokens as $oppIndex => $oppSteps) {
                     if ($oppSteps < 0 || $oppSteps >= 51) {
                         continue; // Opponent token not on main track
@@ -104,14 +110,32 @@ class MoveValidator
         }
 
         // Simulate new steps for moving player to test win condition
-        $simulatedTokens = $allPlayerTokens[$movingColor];
-        $simulatedTokens[$tokenIndex] = $newSteps;
+        $simulatedTokens = $allPlayerTokens;
+        $simulatedTokens[$movingColor][$tokenIndex] = $newSteps;
 
-        $hasWon = true;
-        foreach ($simulatedTokens as $steps) {
-            if ($steps !== BoardService::POSITION_HOME) {
-                $hasWon = false;
-                break;
+        if (strtolower($roomType) === 'team') {
+            // 2v2 Team Mode Win Condition: Both teammates must finish all 8 tokens total
+            $movingTeam = \App\Support\TeamAssignment::teamForColor($movingColor);
+            $hasWon = true;
+
+            foreach ($simulatedTokens as $color => $tokens) {
+                if (\App\Support\TeamAssignment::teamForColor($color) === $movingTeam) {
+                    foreach ($tokens as $steps) {
+                        if ($steps !== BoardService::POSITION_HOME) {
+                            $hasWon = false;
+                            break 2;
+                        }
+                    }
+                }
+            }
+        } else {
+            // Standard Mode Win Condition: Individual player finishes all 4 tokens
+            $hasWon = true;
+            foreach ($simulatedTokens[$movingColor] as $steps) {
+                if ($steps !== BoardService::POSITION_HOME) {
+                    $hasWon = false;
+                    break;
+                }
             }
         }
 
@@ -131,6 +155,38 @@ class MoveValidator
     }
 
     /**
+     * Check if a player has finished all 4 tokens.
+     *
+     * @param array<int, int> $playerTokens Array of 4 token step positions
+     * @return bool
+     */
+    public function isPlayerFinished(array $playerTokens): bool
+    {
+        if (count($playerTokens) < 4) {
+            return false;
+        }
+
+        foreach ($playerTokens as $steps) {
+            if ($steps !== BoardService::POSITION_HOME) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * Check if a player's turn should be skipped (e.g. all 4 tokens are home).
+     *
+     * @param array<int, int> $playerTokens Array of 4 token step positions
+     * @return bool
+     */
+    public function shouldSkipTurn(array $playerTokens): bool
+    {
+        return $this->isPlayerFinished($playerTokens);
+    }
+
+    /**
      * Get list of movable token indices for a player given a dice roll.
      *
      * @param array<int, int> $playerTokens Array of 4 token step positions
@@ -139,6 +195,10 @@ class MoveValidator
      */
     public function getMovableTokens(array $playerTokens, int $diceValue): array
     {
+        if ($this->shouldSkipTurn($playerTokens)) {
+            return [];
+        }
+
         $movable = [];
         foreach ($playerTokens as $index => $steps) {
             if ($steps === BoardService::POSITION_BASE) {

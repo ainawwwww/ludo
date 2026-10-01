@@ -59,7 +59,7 @@ class RoomController extends Controller
             'category' => $request->input('category', 'social'),
             'tags' => $request->input('tags', ['Ludo', 'VIP']),
             'country_code' => $request->input('country_code', $user->country_code ?? 'PK'),
-            'type' => RoomType::PUBLIC->value,
+            'type' => $request->input('type', RoomType::PUBLIC->value),
             'max_players' => $request->input('max_players', 4),
             'entry_fee' => $entryFee,
             'member_count' => 1,
@@ -183,7 +183,9 @@ class RoomController extends Controller
             : Room::with(['creator', 'players.user'])->where('room_code', strtoupper($id))->firstOrFail();
 
         if ($room->isPrivateOrVip()) {
-            return response()->json(['status' => 'error', 'message' => 'Cannot join private room as listener'], 403);
+            if ($room->created_by !== $user->id && !$room->players()->where('user_id', $user->id)->exists()) {
+                return response()->json(['status' => 'error', 'message' => 'Cannot join private room as listener'], 403);
+            }
         }
 
         // Auto-assign next available seat if user is not already seated
@@ -208,11 +210,8 @@ class RoomController extends Controller
             ]
         );
 
-        // Compute accurate distinct visitor & player count
-        $distinctVisitors = \App\Models\RoomVisit::where('room_id', $room->id)->distinct('user_id')->count('user_id');
-        $seatedCount = $room->players()->count();
-        $room->member_count = max(1, max($distinctVisitors, $seatedCount));
-        $room->save();
+        // Increment active member count
+        $room->increment('member_count');
 
         $room->load(['creator', 'players.user']);
 
@@ -321,6 +320,40 @@ class RoomController extends Controller
         return response()->json([
             'status' => 'success',
             'message' => 'Left seat',
+            'data' => new RoomResource($room),
+        ]);
+    }
+
+    /**
+     * POST /api/v1/rooms/{room}/leave
+     * Headers: Authorization: Bearer <token>
+     *
+     * Leaves the room as listener/member, decrements member count, and broadcasts RoomUpdated.
+     */
+    public function leave(Request $request, string $id): JsonResponse
+    {
+        $user = $request->user();
+        $room = is_numeric($id)
+            ? Room::with(['creator', 'players.user'])->findOrFail((int) $id)
+            : Room::with(['creator', 'players.user'])->where('room_code', strtoupper($id))->firstOrFail();
+
+        // Non-host player leaving removes seat
+        if ($room->created_by !== $user->id) {
+            $room->players()->where('user_id', $user->id)->delete();
+        }
+
+        // Decrement member count (floor at 0)
+        if ($room->member_count > 0) {
+            $room->decrement('member_count');
+        }
+
+        $room->load(['creator', 'players.user']);
+
+        broadcast(new RoomUpdated($room->id, (new RoomResource($room))->resolve()));
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Left room successfully',
             'data' => new RoomResource($room),
         ]);
     }

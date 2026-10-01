@@ -82,7 +82,14 @@ class Room extends Model
     public function isPrivateOrVip(): bool
     {
         $val = $this->type instanceof RoomType ? $this->type->value : (string) $this->type;
-        return $val === RoomType::PRIVATE->value || $val === RoomType::VIP->value || $val === 'private' || $val === 'vip';
+        return in_array($val, [
+            RoomType::PRIVATE->value,
+            RoomType::VIP->value,
+            RoomType::TEAM->value,
+            'private',
+            'vip',
+            'team',
+        ], true);
     }
 
     public function visits(): HasMany

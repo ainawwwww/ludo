@@ -31,7 +31,7 @@ class ChatController extends Controller
         $room = Room::find($request->room_id);
 
         if ($room && $room->isPrivateOrVip()) {
-            $isMember = $room->players()->where('user_id', $user->id)->exists();
+            $isMember = $room->created_by === $user->id || $room->players()->where('user_id', $user->id)->exists();
             if (!$isMember) {
                 return response()->json(['status' => 'error', 'message' => 'Unauthorized access to private room chat'], 403);
             }

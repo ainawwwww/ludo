@@ -89,7 +89,8 @@ class ProcessTurnTimeout implements ShouldQueue
                 $chosenToken = !empty($movableTokens) ? $movableTokens[0] : 0;
 
                 // 2. Perform auto-move on chosen token
-                $moveResult = $moveValidator->validateMove($state['token_positions'], $playerColor, $chosenToken, $diceRoll);
+                $roomType = $state['room_type'] ?? ($room ? ($room->type instanceof RoomType ? $room->type->value : (string) $room->type) : 'public');
+                $moveResult = $moveValidator->validateMove($state['token_positions'], $playerColor, $chosenToken, $diceRoll, $roomType);
 
                 if ($moveResult['is_valid']) {
                     $state['token_positions'][$playerColor][$chosenToken] = $moveResult['new_steps'];

@@ -43,7 +43,7 @@ class PrivateRoomService
         if ($roomType !== null) {
             $query->where('type', $roomType);
         } else {
-            $query->whereIn('type', [RoomType::PRIVATE, RoomType::VIP]);
+            $query->whereIn('type', [RoomType::PRIVATE, RoomType::VIP, RoomType::TEAM]);
         }
 
         $room = $query->first();
@@ -493,7 +493,7 @@ class PrivateRoomService
         if ($roomType !== null) {
             $query->where('type', $roomType);
         } else {
-            $query->whereIn('type', [RoomType::PRIVATE, RoomType::VIP]);
+            $query->whereIn('type', [RoomType::PRIVATE, RoomType::VIP, RoomType::TEAM]);
         }
 
         $room = $query->first();

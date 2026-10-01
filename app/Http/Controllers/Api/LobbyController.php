@@ -66,13 +66,34 @@ class LobbyController extends Controller
             ],
         ];
 
-        // Query recommended rooms
+        // Query recommended rooms (exclude private/vip/team types and untitled game-match rooms)
         $query = Room::with(['creator', 'players.user'])
-            ->whereNotIn('type', [RoomType::PRIVATE->value, RoomType::VIP->value])
-            ->where('is_live', true);
+            ->whereNotIn('type', [RoomType::PRIVATE->value, RoomType::VIP->value, RoomType::TEAM->value])
+            ->where('is_live', true)
+            ->whereNotNull('title')
+            ->where('title', '!=', '');
 
         if (!empty($country)) {
-            $query->where('country_code', strtoupper($country));
+            $upper = strtoupper(trim($country));
+            $countryMap = [
+                'PAKISTAN' => 'PK',
+                'INDIA' => 'IN',
+                'SAUDI ARABIA' => 'SA',
+                'KSA' => 'SA',
+                'BANGLADESH' => 'BD',
+                'UAE' => 'AE',
+                'UNITED ARAB EMIRATES' => 'AE',
+                'ALGERIA' => 'DZ',
+                'UNITED KINGDOM' => 'GB',
+                'UK' => 'GB',
+                'UNITED STATES' => 'US',
+                'USA' => 'US',
+            ];
+            $code = $countryMap[$upper] ?? (strlen($upper) === 2 ? $upper : $upper);
+            $query->where(function ($q) use ($code, $upper) {
+                $q->where('country_code', $code)
+                  ->orWhere('country_code', $upper);
+            });
         }
 
         $rooms = $query->orderBy('member_count', 'desc')
@@ -104,8 +125,10 @@ class LobbyController extends Controller
 
         // Popular live hosts (Users who currently host live rooms, ordered by audience size)
         $liveRooms = Room::with(['creator', 'players.user'])
-            ->whereNotIn('type', [RoomType::PRIVATE->value, RoomType::VIP->value])
+            ->whereNotIn('type', [RoomType::PRIVATE->value, RoomType::VIP->value, RoomType::TEAM->value])
             ->where('is_live', true)
+            ->whereNotNull('title')
+            ->where('title', '!=', '')
             ->orderBy('member_count', 'desc')
             ->get();
 
@@ -129,8 +152,10 @@ class LobbyController extends Controller
 
         // Trending live rooms
         $trendingRooms = Room::with(['creator', 'players.user'])
-            ->whereNotIn('type', [RoomType::PRIVATE->value, RoomType::VIP->value])
+            ->whereNotIn('type', [RoomType::PRIVATE->value, RoomType::VIP->value, RoomType::TEAM->value])
             ->where('is_live', true)
+            ->whereNotNull('title')
+            ->where('title', '!=', '')
             ->orderBy('member_count', 'desc')
             ->orderBy('id', 'desc')
             ->paginate($perPage);
