@@ -22,6 +22,8 @@ class MatchmakingTest extends TestCase
         parent::setUp();
         $this->seed(LeagueSeeder::class);
 
+        \Illuminate\Support\Facades\Queue::fake([\App\Jobs\ProcessTurnTimeout::class]);
+
         // Clear any matchmaking cache keys
         Cache::flush();
     }

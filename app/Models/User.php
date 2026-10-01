@@ -39,6 +39,8 @@ class User extends Authenticatable
         'name_change_reset_at',
         'league_points',
         'rank',
+        'last_chest_claimed_at',
+        'vip_expires_at',
     ];
 
     protected $hidden = [
@@ -59,6 +61,8 @@ class User extends Authenticatable
             'name_change_reset_at' => 'datetime',
             'league_points' => 'integer',
             'rank' => 'integer',
+            'last_chest_claimed_at' => 'datetime',
+            'vip_expires_at' => 'datetime',
         ];
     }
 
@@ -88,6 +92,12 @@ class User extends Authenticatable
         $this->save();
     }
 
+    public function getLevelAttribute($value): int
+    {
+        $calculated = max(1, (int) floor(((int) ($this->xp ?? 0)) / 100) + 1);
+        return max((int) ($value ?? 1), $calculated);
+    }
+
     // Accessors for coins and diamonds from associated wallet
     public function getCoinsAttribute(): int
     {
@@ -105,6 +115,16 @@ class User extends Authenticatable
         }
         $wallet = Wallet::where('user_id', $this->id)->first();
         return $wallet ? (int) $wallet->diamonds_balance : 0;
+    }
+
+    public function getIsVipAttribute(): bool
+    {
+        return $this->vip_expires_at !== null && $this->vip_expires_at->isFuture();
+    }
+
+    public function dailyTasks(): HasMany
+    {
+        return $this->hasMany(UserDailyTask::class, 'user_id');
     }
 
     public function wallet(): HasOne
@@ -126,6 +146,31 @@ class User extends Authenticatable
     public function friends(): HasMany
     {
         return $this->hasMany(Friend::class, 'user_id');
+    }
+
+    public function following(): HasMany
+    {
+        return $this->hasMany(Follow::class, 'user_id');
+    }
+
+    public function followers(): HasMany
+    {
+        return $this->hasMany(Follow::class, 'followed_user_id');
+    }
+
+    public function followingUsers(): BelongsToMany
+    {
+        return $this->belongsToMany(User::class, 'follows', 'user_id', 'followed_user_id');
+    }
+
+    public function followerUsers(): BelongsToMany
+    {
+        return $this->belongsToMany(User::class, 'follows', 'followed_user_id', 'user_id');
+    }
+
+    public function roomVisits(): HasMany
+    {
+        return $this->hasMany(RoomVisit::class, 'user_id');
     }
 
     /**

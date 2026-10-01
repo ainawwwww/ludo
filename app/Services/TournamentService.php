@@ -97,8 +97,9 @@ class TournamentService
                         'status' => 'active',
                         'joined_at' => now(),
                     ]);
+                    $participant = $existingParticipant;
                 } else {
-                    TournamentParticipant::create([
+                    $participant = TournamentParticipant::create([
                         'tournament_id' => $tournament->id,
                         'user_id' => $user->id,
                         'current_level' => 1,
@@ -116,7 +117,13 @@ class TournamentService
             ];
         }
 
-        return $this->queueAndMatch($user, $tournament, 1);
+        return [
+            'status' => 'joined',
+            'tournament_id' => $tournament->id,
+            'current_level' => 1,
+            'highest_level_reached' => $participant->highest_level_reached ?? 1,
+            'participant_status' => 'active',
+        ];
     }
 
     /**
@@ -146,6 +153,43 @@ class TournamentService
                 'status' => 'error',
                 'code' => 404,
                 'message' => 'No active participation found for this user in this tournament',
+            ];
+        }
+
+        // Check if there is already an in-progress match for this user at this level
+        $activeMatch = TournamentMatch::where('tournament_id', $tournamentId)
+            ->where('level', $participant->current_level)
+            ->where('status', 'in_progress')
+            ->where(function ($q) use ($user) {
+                $q->where('player1_id', $user->id)
+                  ->orWhere('player2_id', $user->id);
+            })
+            ->latest()
+            ->first();
+
+        if ($activeMatch) {
+            $roomPlayers = RoomPlayer::where('room_id', $activeMatch->room_id)->with('user')->get();
+            $players = $roomPlayers->map(function ($rp) {
+                return [
+                    'user_id' => $rp->user_id,
+                    'username' => $rp->user?->username ?? 'Player',
+                    'avatar_url' => $rp->user?->avatar_url,
+                    'seat_position' => $rp->seat_position,
+                    'color' => $rp->color,
+                ];
+            })->values()->toArray();
+
+            $game = Game::where('room_id', $activeMatch->room_id)
+                ->where('status', GameStatus::IN_PROGRESS->value)
+                ->first();
+
+            return [
+                'status' => 'matched',
+                'tournament_id' => $tournamentId,
+                'level' => $participant->current_level,
+                'room_id' => $activeMatch->room_id,
+                'game_id' => $game?->id ?? $activeMatch->room_id,
+                'players' => $players,
             ];
         }
 
@@ -439,6 +483,131 @@ class TournamentService
         } finally {
             optional($lock)->release();
         }
+    }
+
+    /**
+     * Claim grand prize for a completed tournament.
+     */
+    public function claimPrize(User $user, int $tournamentId): array
+    {
+        $tournament = Tournament::find($tournamentId);
+        if (!$tournament) {
+            return [
+                'status' => 'error',
+                'code' => 404,
+                'message' => 'Tournament not found',
+            ];
+        }
+
+        $participant = TournamentParticipant::where('tournament_id', $tournamentId)
+            ->where('user_id', $user->id)
+            ->first();
+
+        if (!$participant) {
+            return [
+                'status' => 'error',
+                'code' => 404,
+                'message' => 'No participation record found for this tournament',
+            ];
+        }
+
+        if ($participant->highest_level_reached < $tournament->max_level && $participant->status !== 'completed') {
+            return [
+                'status' => 'error',
+                'code' => 400,
+                'message' => 'Tournament has not been completed yet',
+            ];
+        }
+
+        if ($participant->is_claimed) {
+            return [
+                'status' => 'already_claimed',
+                'code' => 422,
+                'message' => 'Grand prize has already been claimed for this tournament',
+            ];
+        }
+
+        // Calculate grand champion prize (25% of pool, minimum 3x entry fee)
+        $poolShare = (int) round($tournament->prize_pool * 0.25);
+        $grandPrize = max($poolShare, $tournament->entry_fee * 3);
+
+        return DB::transaction(function () use ($user, $tournament, $participant, $grandPrize) {
+            $wallet = Wallet::where('user_id', $user->id)->lockForUpdate()->first();
+            if (!$wallet) {
+                return [
+                    'status' => 'error',
+                    'code' => 500,
+                    'message' => 'User wallet not found',
+                ];
+            }
+
+            $wallet->increment('coins_balance', $grandPrize);
+
+            Transaction::create([
+                'user_id' => $user->id,
+                'type' => TransactionType::WIN,
+                'currency_type' => 'coins',
+                'amount' => $grandPrize,
+                'reference_id' => (string) $participant->id,
+                'created_at' => now(),
+            ]);
+
+            $participant->update([
+                'is_claimed' => true,
+                'claimed_at' => now(),
+            ]);
+
+            return [
+                'status' => 'success',
+                'prize_gold' => $grandPrize,
+                'wallet_coins' => $wallet->fresh()->coins_balance,
+                'message' => 'Grand prize claimed successfully!',
+            ];
+        });
+    }
+
+    /**
+     * Get user's tournament history.
+     */
+    public function getUserTournamentHistory(User $user): array
+    {
+        $participations = TournamentParticipant::with(['tournament.levels'])
+            ->where('user_id', $user->id)
+            ->orderByDesc('updated_at')
+            ->limit(30)
+            ->get();
+
+        return $participations->map(function ($p) {
+            $tournament = $p->tournament;
+            $isChampion = $p->status === 'completed' || $p->highest_level_reached >= ($tournament->max_level ?? 6);
+
+            // Compute total rewards accumulated from level rewards
+            $earnedCoins = 0;
+            if ($tournament && $tournament->levels) {
+                foreach ($tournament->levels as $lvl) {
+                    if ($lvl->level <= $p->highest_level_reached) {
+                        $earnedCoins += $lvl->reward_coins;
+                    }
+                }
+            }
+
+            if ($p->is_claimed && $tournament) {
+                $poolShare = (int) round($tournament->prize_pool * 0.25);
+                $earnedCoins += max($poolShare, $tournament->entry_fee * 3);
+            }
+
+            return [
+                'id' => 'hist_' . $p->id,
+                'tournament_id' => $p->tournament_id,
+                'tournament_title' => $tournament->name ?? 'Tournament',
+                'mode' => $tournament->mode ?? 'classic',
+                'result' => $isChampion ? 'champion' : 'eliminated',
+                'round_reached' => $p->highest_level_reached,
+                'reward_gold' => $earnedCoins,
+                'is_claimed' => (bool) $p->is_claimed,
+                'completed_at' => $p->updated_at?->toIso8601String() ?? now()->toIso8601String(),
+            ];
+        })->toArray();
     }
 
     private function getQueueKey(int $tournamentId, int $level): string

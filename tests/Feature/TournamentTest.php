@@ -17,6 +17,7 @@ use Database\Seeders\TournamentSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Event;
+use Laravel\Sanctum\Sanctum;
 use Tests\TestCase;
 
 class TournamentTest extends TestCase
@@ -45,8 +46,8 @@ class TournamentTest extends TestCase
 
         $response->assertStatus(200)
             ->assertJsonPath('status', 'success')
-            ->assertJsonPath('data.status', 'waiting')
-            ->assertJsonPath('data.queue_position', 1);
+            ->assertJsonPath('data.status', 'joined')
+            ->assertJsonPath('data.current_level', 1);
 
         // Balance deducted from 1000 to 400
         $this->assertDatabaseHas('wallets', [
@@ -122,12 +123,16 @@ class TournamentTest extends TestCase
         $user1->wallet->update(['coins_balance' => 1000]);
         $user2->wallet->update(['coins_balance' => 1000]);
 
-        // User 1 joins -> waiting
-        $res1 = $this->actingAs($user1)->postJson("/api/v1/tournaments/{$this->tournament->id}/join");
+        // Users join tournament
+        $this->actingAs($user1)->postJson("/api/v1/tournaments/{$this->tournament->id}/join")->assertStatus(200);
+        $this->actingAs($user2)->postJson("/api/v1/tournaments/{$this->tournament->id}/join")->assertStatus(200);
+
+        // User 1 queues via continue -> waiting
+        $res1 = $this->actingAs($user1)->postJson("/api/v1/tournaments/{$this->tournament->id}/continue");
         $res1->assertStatus(200)->assertJsonPath('data.status', 'waiting');
 
-        // User 2 joins -> matched
-        $res2 = $this->actingAs($user2)->postJson("/api/v1/tournaments/{$this->tournament->id}/join");
+        // User 2 queues via continue -> matched
+        $res2 = $this->actingAs($user2)->postJson("/api/v1/tournaments/{$this->tournament->id}/continue");
         $res2->assertStatus(200)->assertJsonPath('data.status', 'matched');
 
         $roomId = $res2->json('data.room_id');
@@ -157,7 +162,10 @@ class TournamentTest extends TestCase
         $user2->wallet->update(['coins_balance' => 1000]);
 
         $this->actingAs($user1)->postJson("/api/v1/tournaments/{$this->tournament->id}/join");
-        $res2 = $this->actingAs($user2)->postJson("/api/v1/tournaments/{$this->tournament->id}/join");
+        $this->actingAs($user2)->postJson("/api/v1/tournaments/{$this->tournament->id}/join");
+
+        $this->actingAs($user1)->postJson("/api/v1/tournaments/{$this->tournament->id}/continue");
+        $res2 = $this->actingAs($user2)->postJson("/api/v1/tournaments/{$this->tournament->id}/continue");
         $roomId = $res2->json('data.room_id');
 
         // Process match result (User 1 wins)
@@ -312,5 +320,63 @@ class TournamentTest extends TestCase
         // Verify no tournament_matches or tournament_participants records created or affected
         $this->assertDatabaseCount('tournament_matches', 0);
         $this->assertDatabaseCount('tournament_participants', 0);
+    }
+
+    public function test_user_can_view_tournament_history(): void
+    {
+        $user = User::factory()->create();
+        Sanctum::actingAs($user);
+
+        TournamentParticipant::create([
+            'tournament_id' => $this->tournament->id,
+            'user_id' => $user->id,
+            'current_level' => 6,
+            'highest_level_reached' => 6,
+            'status' => 'completed',
+            'joined_at' => now(),
+        ]);
+
+        $response = $this->getJson('/api/v1/tournaments/my-history');
+
+        $response->assertStatus(200)
+            ->assertJsonPath('status', 'success')
+            ->assertJsonCount(1, 'data')
+            ->assertJsonPath('data.0.result', 'champion')
+            ->assertJsonPath('data.0.round_reached', 6);
+    }
+
+    public function test_user_can_claim_completed_tournament_prize(): void
+    {
+        $user = User::factory()->create();
+        Wallet::create([
+            'user_id' => $user->id,
+            'coins_balance' => 500,
+            'diamonds_balance' => 0,
+        ]);
+        Sanctum::actingAs($user);
+
+        $participant = TournamentParticipant::create([
+            'tournament_id' => $this->tournament->id,
+            'user_id' => $user->id,
+            'current_level' => 6,
+            'highest_level_reached' => 6,
+            'status' => 'completed',
+            'is_claimed' => false,
+            'joined_at' => now(),
+        ]);
+
+        $response = $this->postJson("/api/v1/tournaments/{$this->tournament->id}/claim");
+
+        $response->assertStatus(200)
+            ->assertJsonPath('status', 'success');
+
+        $this->assertDatabaseHas('tournament_participants', [
+            'id' => $participant->id,
+            'is_claimed' => true,
+        ]);
+
+        // Second claim attempt should fail
+        $secondResponse = $this->postJson("/api/v1/tournaments/{$this->tournament->id}/claim");
+        $secondResponse->assertStatus(422);
     }
 }

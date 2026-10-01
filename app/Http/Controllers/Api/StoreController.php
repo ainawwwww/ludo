@@ -112,4 +112,74 @@ class StoreController extends Controller
             'data' => StoreItemResource::collection($items),
         ]);
     }
+
+    /**
+     * POST /api/v1/store/equip
+     * Headers: Authorization: Bearer <token>
+     * 
+     * Request Payload (JSON):
+     * {
+     *   "item_id": 1
+     * }
+     */
+    public function equip(Request $request): JsonResponse
+    {
+        $request->validate([
+            'item_id' => 'required|integer|exists:store_items,id',
+        ]);
+
+        $user = $request->user();
+        $targetItem = StoreItem::findOrFail($request->item_id);
+
+        $inventoryRecord = UserInventory::where('user_id', $user->id)
+            ->where('item_id', $targetItem->id)
+            ->first();
+
+        if (!$inventoryRecord && $targetItem->price > 0) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'You do not own this item. Please purchase it first.',
+            ], 403);
+        }
+
+        if (!$inventoryRecord) {
+            $inventoryRecord = UserInventory::create([
+                'user_id' => $user->id,
+                'item_id' => $targetItem->id,
+                'is_equipped' => false,
+                'purchased_at' => now(),
+            ]);
+        }
+
+        // Un-equip other items of the same type for this user
+        $sameTypeItemIds = StoreItem::where('type', $targetItem->type)->pluck('id');
+        UserInventory::where('user_id', $user->id)
+            ->whereIn('item_id', $sameTypeItemIds)
+            ->update(['is_equipped' => false]);
+
+        // Equip the chosen item
+        $inventoryRecord->update(['is_equipped' => true]);
+
+        // Sync to user metadata for real-time room / match broadcasts
+        $metadata = $user->metadata ?? [];
+        $equipped = $metadata['equipped'] ?? [];
+        $typeKey = is_string($targetItem->type) ? $targetItem->type : $targetItem->type->value;
+        $equipped[$typeKey] = [
+            'id' => $targetItem->id,
+            'name' => $targetItem->name,
+            'image_url' => $targetItem->image_url,
+        ];
+        $metadata['equipped'] = $equipped;
+        $user->metadata = $metadata;
+        $user->save();
+
+        return response()->json([
+            'status' => 'success',
+            'message' => $targetItem->name . ' equipped successfully',
+            'data' => [
+                'equipped_item' => new StoreItemResource($targetItem),
+                'equipped' => $equipped,
+            ],
+        ]);
+    }
 }

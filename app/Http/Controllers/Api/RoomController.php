@@ -47,16 +47,23 @@ class RoomController extends Controller
         $user = $request->user();
         $entryFee = $request->input('entry_fee', 100);
 
-        $userCoins = $user->wallet ? (int) $user->wallet->coins_balance : (int) $user->coins;
-        if ($userCoins < $entryFee) {
-            return response()->json(['status' => 'error', 'message' => 'Insufficient coins for room entry fee'], 400);
+        if ($entryFee > 0) {
+            if ($user->wallet) {
+                $user->wallet->decrement('coins_balance', $entryFee);
+            }
         }
 
         $room = Room::create([
             'room_code' => strtoupper(Str::random(6)),
+            'title' => $request->input('title', ($user->username ?? 'Player') . "'s Lounge"),
+            'category' => $request->input('category', 'social'),
+            'tags' => $request->input('tags', ['Ludo', 'VIP']),
+            'country_code' => $request->input('country_code', $user->country_code ?? 'PK'),
             'type' => $request->input('type', RoomType::PUBLIC->value),
             'max_players' => $request->input('max_players', 4),
             'entry_fee' => $entryFee,
+            'member_count' => 1,
+            'is_live' => true,
             'status' => RoomStatus::WAITING->value,
             'created_by' => $user->id,
             'created_at' => now(),
@@ -97,6 +104,14 @@ class RoomController extends Controller
                 ->firstOrFail();
         }
 
+        if ($room->isPrivateOrVip()) {
+            $user = request()->user();
+            $isMember = $user && $room->players->contains('user_id', $user->id);
+            if (!$isMember) {
+                return response()->json(['status' => 'error', 'message' => 'Unauthorized access to private room'], 403);
+            }
+        }
+
         return response()->json([
             'status' => 'success',
             'data' => new RoomResource($room),
@@ -118,6 +133,10 @@ class RoomController extends Controller
         $room = Room::where('room_code', $request->room_code)
             ->where('status', RoomStatus::WAITING->value)
             ->firstOrFail();
+
+        if ($room->isPrivateOrVip()) {
+            return response()->json(['status' => 'error', 'message' => 'Private rooms cannot be joined via public room join'], 403);
+        }
 
         if ($room->players()->count() >= $room->max_players) {
             return response()->json(['status' => 'error', 'message' => 'Room is full'], 409);
@@ -145,6 +164,196 @@ class RoomController extends Controller
         return response()->json([
             'status' => 'success',
             'message' => 'Joined room successfully',
+            'data' => new RoomResource($room),
+        ]);
+    }
+
+    /**
+     * POST /api/v1/rooms/{room}/join
+     * Headers: Authorization: Bearer <token>
+     * 
+     * Adds user to room as a listener (not seated on game board) and records room visit.
+     * Fires RoomUpdated broadcast on private-room.{roomId}.
+     */
+    public function joinAsListener(Request $request, string $id): JsonResponse
+    {
+        $user = $request->user();
+        $room = is_numeric($id)
+            ? Room::with(['creator', 'players.user'])->findOrFail((int) $id)
+            : Room::with(['creator', 'players.user'])->where('room_code', strtoupper($id))->firstOrFail();
+
+        if ($room->isPrivateOrVip()) {
+            if ($room->created_by !== $user->id && !$room->players()->where('user_id', $user->id)->exists()) {
+                return response()->json(['status' => 'error', 'message' => 'Cannot join private room as listener'], 403);
+            }
+        }
+
+        // Auto-assign next available seat if user is not already seated
+        if (!$room->players()->where('user_id', $user->id)->exists() && $room->players()->count() < $room->max_players) {
+            if ($room->entry_fee > 0 && $user->wallet) {
+                if ($user->wallet->coins_balance < $room->entry_fee) {
+                    return response()->json(['status' => 'error', 'message' => 'Insufficient coins for room entry fee'], 400);
+                }
+                $user->wallet->decrement('coins_balance', $room->entry_fee);
+            }
+            $this->assignSeatAndColor($room, $user);
+        }
+
+        // Log room visit for 'recently' visited filter
+        \App\Models\RoomVisit::updateOrCreate(
+            [
+                'user_id' => $user->id,
+                'room_id' => $room->id,
+            ],
+            [
+                'visited_at' => now(),
+            ]
+        );
+
+        // Increment active member count
+        $room->increment('member_count');
+
+        $room->load(['creator', 'players.user']);
+
+        // Broadcast room.updated event on private channel
+        broadcast(new RoomUpdated($room->id, (new RoomResource($room))->resolve()));
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Joined room as listener',
+            'data' => new RoomResource($room),
+        ]);
+    }
+
+    /**
+     * POST /api/v1/rooms/{room}/seat
+     * Headers: Authorization: Bearer <token>
+     * 
+     * Request Payload (JSON):
+     * {
+     *   "seat_position": 2
+     * }
+     */
+    public function takeSeat(Request $request, string $id): JsonResponse
+    {
+        $user = $request->user();
+        $room = is_numeric($id)
+            ? Room::with(['creator', 'players.user'])->findOrFail((int) $id)
+            : Room::with(['creator', 'players.user'])->where('room_code', strtoupper($id))->firstOrFail();
+
+        if ($room->isPrivateOrVip()) {
+            return response()->json(['status' => 'error', 'message' => 'Cannot take seat in private room via public API'], 403);
+        }
+
+        $seatPosition = (int) $request->input('seat_position', 2);
+        if ($seatPosition < 1 || $seatPosition > 8) {
+            return response()->json(['status' => 'error', 'message' => 'Invalid seat position'], 422);
+        }
+
+        // Check if seat is occupied by another user
+        $occupied = $room->players()->where('seat_position', $seatPosition)->where('user_id', '!=', $user->id)->exists();
+        if ($occupied) {
+            return response()->json(['status' => 'error', 'message' => 'Seat is already occupied'], 409);
+        }
+
+        // Remove from previous seat in this room
+        $room->players()->where('user_id', $user->id)->delete();
+
+        $colorMap = [
+            1 => PlayerColor::RED->value,
+            2 => PlayerColor::GREEN->value,
+            3 => PlayerColor::YELLOW->value,
+            4 => PlayerColor::BLUE->value,
+        ];
+        $color = $colorMap[$seatPosition] ?? PlayerColor::RED->value;
+        $takenColors = $room->players()->pluck('color')->map(fn($c) => $c->value ?? $c)->toArray();
+        if (in_array($color, $takenColors, true)) {
+            foreach ($colorMap as $c) {
+                if (!in_array($c, $takenColors, true)) {
+                    $color = $c;
+                    break;
+                }
+            }
+        }
+
+        RoomPlayer::create([
+            'room_id' => $room->id,
+            'user_id' => $user->id,
+            'seat_position' => $seatPosition,
+            'color' => $color,
+            'is_ready' => true,
+            'joined_at' => now(),
+        ]);
+
+        $room->load(['creator', 'players.user']);
+
+        // Broadcast room.updated event on private channel
+        broadcast(new RoomUpdated($room->id, (new RoomResource($room))->resolve()));
+
+        return response()->json([
+            'status' => 'success',
+            'message' => "Successfully seated at Seat $seatPosition",
+            'data' => new RoomResource($room),
+        ]);
+    }
+
+    /**
+     * POST /api/v1/rooms/{room}/leave-seat
+     */
+    public function leaveSeat(Request $request, string $id): JsonResponse
+    {
+        $user = $request->user();
+        $room = is_numeric($id)
+            ? Room::with(['creator', 'players.user'])->findOrFail((int) $id)
+            : Room::with(['creator', 'players.user'])->where('room_code', strtoupper($id))->firstOrFail();
+
+        if ($room->isPrivateOrVip()) {
+            return response()->json(['status' => 'error', 'message' => 'Cannot modify private room via public API'], 403);
+        }
+
+        // Host cannot vacate Seat 1
+        $room->players()->where('user_id', $user->id)->where('seat_position', '!=', 1)->delete();
+        $room->load(['creator', 'players.user']);
+
+        broadcast(new RoomUpdated($room->id, (new RoomResource($room))->resolve()));
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Left seat',
+            'data' => new RoomResource($room),
+        ]);
+    }
+
+    /**
+     * POST /api/v1/rooms/{room}/leave
+     * Headers: Authorization: Bearer <token>
+     *
+     * Leaves the room as listener/member, decrements member count, and broadcasts RoomUpdated.
+     */
+    public function leave(Request $request, string $id): JsonResponse
+    {
+        $user = $request->user();
+        $room = is_numeric($id)
+            ? Room::with(['creator', 'players.user'])->findOrFail((int) $id)
+            : Room::with(['creator', 'players.user'])->where('room_code', strtoupper($id))->firstOrFail();
+
+        // Non-host player leaving removes seat
+        if ($room->created_by !== $user->id) {
+            $room->players()->where('user_id', $user->id)->delete();
+        }
+
+        // Decrement member count (floor at 0)
+        if ($room->member_count > 0) {
+            $room->decrement('member_count');
+        }
+
+        $room->load(['creator', 'players.user']);
+
+        broadcast(new RoomUpdated($room->id, (new RoomResource($room))->resolve()));
+
+        return response()->json([
+            'status' => 'success',
+            'message' => 'Left room successfully',
             'data' => new RoomResource($room),
         ]);
     }

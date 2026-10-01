@@ -16,7 +16,7 @@ class SendChatMessageRequest extends FormRequest
         return [
             'room_id' => 'required|integer|exists:rooms,id',
             'message' => 'required|string|max:500',
-            'message_type' => 'nullable|in:text,emoji,voice,quick_chat',
+            'message_type' => 'nullable|in:text,emoji,voice,quick_chat,gift,reaction',
         ];
     }
 }

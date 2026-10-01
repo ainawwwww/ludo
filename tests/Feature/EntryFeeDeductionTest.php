@@ -19,6 +19,7 @@ class EntryFeeDeductionTest extends TestCase
     {
         parent::setUp();
         $this->seed(LeagueSeeder::class);
+        \Illuminate\Support\Facades\Queue::fake([\App\Jobs\ProcessTurnTimeout::class]);
         Cache::flush();
     }
 

@@ -24,11 +24,18 @@ use App\Services\GameEngine\RedisGameStateStore;
 use App\Services\GameEngine\TurnManager;
 
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Support\Facades\Queue;
 use Tests\TestCase;
 
 class FeatureEnhancementsTest extends TestCase
 {
     use RefreshDatabase;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        Queue::fake([ProcessTurnTimeout::class]);
+    }
 
     public function test_guest_login_creates_guest_user_and_wallet(): void
     {
@@ -201,6 +208,8 @@ class FeatureEnhancementsTest extends TestCase
 
         $state = $stateStore->initializeState(999, 10, $players);
         $initialTimestamp = $state['last_action_at'];
+
+        $this->travel(1)->second();
 
         // Execute turn timeout job
         $job = new ProcessTurnTimeout(999, 0, $initialTimestamp);

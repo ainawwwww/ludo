@@ -18,11 +18,24 @@ class DiceRolled implements ShouldBroadcastNow
         public int $seatPosition,
         public int $userId,
         public int $diceValue,
-        public array $movableTokens
+        public array $movableTokens,
+        public bool $isPrivate = false
     ) {}
 
+    /**
+     * Type-aware dual-channel broadcast:
+     * - Private rooms: PrivateChannel ONLY (room.{id} auth guard requires membership).
+     * - Public/quick-match/tournament: both PrivateChannel + public Channel for network resilience.
+     *   Frontend deduplicates via _recentWsEventSignatures. Do NOT remove either channel for public rooms.
+     */
     public function broadcastOn(): array
     {
+        if ($this->isPrivate) {
+            return [
+                new PrivateChannel('room.' . $this->roomId),
+            ];
+        }
+
         return [
             new PrivateChannel('room.' . $this->roomId),
             new Channel('room.' . $this->roomId),

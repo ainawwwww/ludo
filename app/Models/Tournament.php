@@ -19,6 +19,7 @@ class Tournament extends Model
         'currency_type',
         'prize_pool',
         'max_level',
+        'unlock_level',
         'status',
     ];
 
@@ -28,6 +29,7 @@ class Tournament extends Model
             'entry_fee' => 'integer',
             'prize_pool' => 'integer',
             'max_level' => 'integer',
+            'unlock_level' => 'integer',
         ];
     }
 

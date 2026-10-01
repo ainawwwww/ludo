@@ -20,11 +20,18 @@ class PlayerForfeited implements ShouldBroadcastNow
         public bool $isGameOver = false,
         public ?int $winnerId = null,
         public ?string $winnerUsername = null,
-        public int $prizeCoins = 400
+        public int $prizeCoins = 400,
+        public bool $isPrivate = false
     ) {}
 
     public function broadcastOn(): array
     {
+        if ($this->isPrivate) {
+            return [
+                new PrivateChannel('room.' . $this->roomId),
+            ];
+        }
+
         return [
             new PrivateChannel('room.' . $this->roomId),
             new Channel('room.' . $this->roomId),

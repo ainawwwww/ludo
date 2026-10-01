@@ -1,0 +1,143 @@
+{
+  "description": "Shared Test Vector Fixture for 2v2 Team Mode Ludo Engine Rules (PHP & Dart Engine Parity)",
+  "version": "1.0",
+  "team_assignment": {
+    "team_1": ["red", "yellow"],
+    "team_2": ["green", "blue"],
+    "seat_pairs": [
+      {"seat_1": 1, "seat_2": 3, "team_id": 1, "colors": ["red", "yellow"]},
+      {"seat_1": 2, "seat_2": 4, "team_id": 2, "colors": ["green", "blue"]}
+    ]
+  },
+  "test_cases": [
+    {
+      "id": "friendly_fire_protection",
+      "description": "Red token landing on Yellow token (teammate) on a non-safe main track spot does NOT kill Yellow",
+      "room_type": "team",
+      "moving_color": "red",
+      "token_index": 0,
+      "dice_value": 4,
+      "tokens": {
+        "red": [0, -1, -1, -1],
+        "green": [-1, -1, -1, -1],
+        "yellow": [4, -1, -1, -1],
+        "blue": [-1, -1, -1, -1]
+      },
+      "expected": {
+        "is_valid": true,
+        "new_steps": 4,
+        "is_kill": false,
+        "killed_tokens": [],
+        "has_won": false
+      }
+    },
+    {
+      "id": "opponent_capture",
+      "description": "Red token landing on Green token (opponent) on a non-safe main track spot DOES kill Green",
+      "room_type": "team",
+      "moving_color": "red",
+      "token_index": 0,
+      "dice_value": 4,
+      "tokens": {
+        "red": [0, -1, -1, -1],
+        "green": [43, -1, -1, -1],
+        "yellow": [-1, -1, -1, -1],
+        "blue": [-1, -1, -1, -1]
+      },
+      "expected": {
+        "is_valid": true,
+        "new_steps": 4,
+        "is_kill": true,
+        "killed_tokens": [
+          {
+            "color": "green",
+            "token_index": 0,
+            "old_steps": 43,
+            "new_steps": -1
+          }
+        ],
+        "has_won": false
+      }
+    },
+    {
+      "id": "safe_tile_no_capture",
+      "description": "Red token landing on Green token on a safe star spot does NOT kill Green",
+      "room_type": "team",
+      "moving_color": "red",
+      "token_index": 0,
+      "dice_value": 8,
+      "tokens": {
+        "red": [0, -1, -1, -1],
+        "green": [21, -1, -1, -1],
+        "yellow": [-1, -1, -1, -1],
+        "blue": [-1, -1, -1, -1]
+      },
+      "expected": {
+        "is_valid": true,
+        "new_steps": 8,
+        "is_kill": false,
+        "killed_tokens": [],
+        "has_won": false
+      }
+    },
+    {
+      "id": "single_player_finished_does_not_win_team_game",
+      "description": "Red finishing all 4 tokens while Yellow still has active tokens does NOT trigger team win",
+      "room_type": "team",
+      "moving_color": "red",
+      "token_index": 3,
+      "dice_value": 1,
+      "tokens": {
+        "red": [56, 56, 56, 55],
+        "green": [0, 0, 0, 0],
+        "yellow": [0, 0, 0, 0],
+        "blue": [0, 0, 0, 0]
+      },
+      "expected": {
+        "is_valid": true,
+        "new_steps": 56,
+        "reached_home": true,
+        "has_won": false
+      }
+    },
+    {
+      "id": "team_win_condition_both_teammates_finished",
+      "description": "Yellow finishing its last token when Red has already finished all 4 triggers Team 1 WIN",
+      "room_type": "team",
+      "moving_color": "yellow",
+      "token_index": 3,
+      "dice_value": 1,
+      "tokens": {
+        "red": [56, 56, 56, 56],
+        "green": [0, 0, 0, 0],
+        "yellow": [56, 56, 56, 55],
+        "blue": [0, 0, 0, 0]
+      },
+      "expected": {
+        "is_valid": true,
+        "new_steps": 56,
+        "reached_home": true,
+        "has_won": true
+      }
+    },
+    {
+      "id": "turn_skipping_finished_player",
+      "description": "Player whose 4 tokens are all home ([56, 56, 56, 56]) has 0 movable tokens for any dice roll and their turn is skipped",
+      "room_type": "team",
+      "moving_color": "red",
+      "token_index": 0,
+      "dice_value": 6,
+      "tokens": {
+        "red": [56, 56, 56, 56],
+        "green": [0, 0, 0, 0],
+        "yellow": [10, 15, 20, 25],
+        "blue": [0, 0, 0, 0]
+      },
+      "expected": {
+        "is_finished": true,
+        "should_skip_turn": true,
+        "movable_tokens": []
+      }
+    }
+  ]
+}

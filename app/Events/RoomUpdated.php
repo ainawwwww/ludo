@@ -22,6 +22,7 @@ class RoomUpdated implements ShouldBroadcastNow
     {
         return [
             new PrivateChannel('room.' . $this->roomId),
+            new Channel('room.' . $this->roomId),
         ];
     }
 

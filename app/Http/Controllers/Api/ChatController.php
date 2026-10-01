@@ -28,6 +28,14 @@ class ChatController extends Controller
     public function sendMessage(SendChatMessageRequest $request): JsonResponse
     {
         $user = $request->user();
+        $room = Room::find($request->room_id);
+
+        if ($room && $room->isPrivateOrVip()) {
+            $isMember = $room->created_by === $user->id || $room->players()->where('user_id', $user->id)->exists();
+            if (!$isMember) {
+                return response()->json(['status' => 'error', 'message' => 'Unauthorized access to private room chat'], 403);
+            }
+        }
 
         $message = ChatMessage::create([
             'room_id' => $request->room_id,
@@ -55,6 +63,15 @@ class ChatController extends Controller
     public function getMessages(Request $request): JsonResponse
     {
         $request->validate(['room_id' => 'required|integer|exists:rooms,id']);
+
+        $room = Room::find($request->room_id);
+        if ($room && $room->isPrivateOrVip()) {
+            $user = $request->user();
+            $isMember = $user && $room->players()->where('user_id', $user->id)->exists();
+            if (!$isMember) {
+                return response()->json(['status' => 'error', 'message' => 'Unauthorized access to private room chat'], 403);
+            }
+        }
 
         $messages = ChatMessage::with('user')
             ->where('room_id', $request->room_id)
