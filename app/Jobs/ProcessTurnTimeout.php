@@ -63,8 +63,22 @@ class ProcessTurnTimeout implements ShouldQueue
                 $room = Room::find($this->roomId);
                 $isPrivate = $room ? $room->isPrivateOrVip() : false;
 
-                // 1. If player hasn't rolled yet -> timeout expired! Forfeit turn and pass directly to next player (NO AUTO-ROLL)
+                // 1. If player hasn't rolled yet -> timeout expired!
                 if ($state['can_roll']) {
+                    // Track consecutive missed turns for this seat
+                    $missedTurns = (int) ($state['missed_turns'][$seat] ?? 0) + 1;
+                    if (!isset($state['missed_turns']) || !is_array($state['missed_turns'])) {
+                        $state['missed_turns'] = [];
+                    }
+                    $state['missed_turns'][$seat] = $missedTurns;
+
+                    // If player missed 3 consecutive turns without rolling, auto-forfeit them!
+                    if ($missedTurns >= 3) {
+                        $forfeitService = app(\App\Services\GameEngine\GameForfeitService::class);
+                        $forfeitService->forfeitSeat($this->roomId, $seat, 'timeout');
+                        return;
+                    }
+
                     $nextSeat = $turnManager->getNextTurn($seat, $state['active_seats'], false);
                     $state['can_roll'] = true;
                     $state['must_move'] = false;

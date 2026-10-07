@@ -394,6 +394,55 @@ class AuthController extends Controller
         $name = $payload['name'] ?? null;
         $avatarUrl = $payload['picture'] ?? null;
 
+        // 0. If current authenticated session is a Guest, bind current guest to Google
+        $currentUser = $request->user('sanctum');
+        if ($currentUser && $currentUser->is_guest) {
+            $conflictUser = User::where('google_id', $googleId)
+                ->when($email, fn($q) => $q->orWhere('email', $email))
+                ->where('id', '!=', $currentUser->id)
+                ->first();
+
+            if ($conflictUser) {
+                $token = $conflictUser->createToken('auth_token')->plainTextToken;
+                return response()->json([
+                    'status' => 'success',
+                    'message' => 'Logged in successfully',
+                    'data' => [
+                        'token' => $token,
+                        'user' => new UserResource($conflictUser),
+                    ]
+                ], 200);
+            }
+
+            $currentUser->google_id = $googleId;
+            if (!empty($email)) {
+                $currentUser->email = $email;
+            }
+            $currentUser->auth_provider = 'google';
+            $currentUser->is_guest = false;
+            if (empty($currentUser->avatar_url) && !empty($avatarUrl)) {
+                $currentUser->avatar_url = $avatarUrl;
+            }
+            if (!empty($name) && str_starts_with($currentUser->username, 'Guest')) {
+                $candidate = Str::slug($name, '_');
+                if (!empty($candidate) && !User::where('username', $candidate)->where('id', '!=', $currentUser->id)->exists()) {
+                    $currentUser->username = $candidate;
+                }
+            }
+            $currentUser->save();
+
+            $token = $currentUser->createToken('auth_token')->plainTextToken;
+
+            return response()->json([
+                'status' => 'success',
+                'message' => 'Account bound to Google successfully',
+                'data' => [
+                    'token' => $token,
+                    'user' => new UserResource($currentUser),
+                ]
+            ], 200);
+        }
+
         // 1. Check if user already exists with this google_id
         $user = User::where('google_id', $googleId)->first();
 

@@ -264,11 +264,15 @@ class RoomController extends Controller
             2 => PlayerColor::GREEN->value,
             3 => PlayerColor::YELLOW->value,
             4 => PlayerColor::BLUE->value,
+            5 => PlayerColor::RED->value,
+            6 => PlayerColor::GREEN->value,
+            7 => PlayerColor::YELLOW->value,
+            8 => PlayerColor::BLUE->value,
         ];
         $color = $colorMap[$seatPosition] ?? PlayerColor::RED->value;
-        $takenColors = $room->players()->pluck('color')->map(fn($c) => $c->value ?? $c)->toArray();
-        if (in_array($color, $takenColors, true)) {
-            foreach ($colorMap as $c) {
+        $takenColors = $room->players()->pluck('color')->map(fn($c) => $c instanceof PlayerColor ? $c->value : (string)$c)->toArray();
+        if ($seatPosition <= 4 && in_array($color, $takenColors, true)) {
+            foreach ([PlayerColor::RED->value, PlayerColor::GREEN->value, PlayerColor::YELLOW->value, PlayerColor::BLUE->value] as $c) {
                 if (!in_array($c, $takenColors, true)) {
                     $color = $c;
                     break;

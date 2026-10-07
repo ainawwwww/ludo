@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Requests\SendFriendRequest;
 use App\Http\Resources\FriendResource;
 use App\Models\Friend;
+use App\Models\User;
 
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -64,13 +65,96 @@ class FriendController extends Controller
     }
 
     /**
+     * GET /api/v1/friends/search?query=...
+     * Headers: Authorization: Bearer <token>
+     */
+    public function search(Request $request): JsonResponse
+    {
+        $currentUserId = $request->user()->id;
+        $query = trim($request->input('query', ''));
+
+        if (empty($query)) {
+            return response()->json([
+                'status' => 'success',
+                'data' => [],
+            ]);
+        }
+
+        // Search by numeric ID or by username (case-insensitive substring)
+        $users = User::where('id', '!=', $currentUserId)
+            ->where(function ($q) use ($query) {
+                if (is_numeric($query)) {
+                    $q->where('id', (int) $query)
+                      ->orWhere('username', 'LIKE', "%{$query}%");
+                } else {
+                    $q->where('username', 'LIKE', "%{$query}%");
+                }
+            })
+            ->take(20)
+            ->get();
+
+        $targetUserIds = $users->pluck('id')->toArray();
+
+        // Fetch existing friendships with current user
+        $friendships = Friend::where(function ($q) use ($currentUserId, $targetUserIds) {
+            $q->where('user_id', $currentUserId)->whereIn('friend_id', $targetUserIds);
+        })->orWhere(function ($q) use ($currentUserId, $targetUserIds) {
+            $q->whereIn('user_id', $targetUserIds)->where('friend_id', $currentUserId);
+        })->get();
+
+        $friendshipMap = [];
+        $friendshipIdMap = [];
+        foreach ($friendships as $f) {
+            $otherId = ($f->user_id === $currentUserId) ? $f->friend_id : $f->user_id;
+            $friendshipIdMap[$otherId] = $f->id;
+            if ($f->status === FriendStatus::ACCEPTED->value) {
+                $friendshipMap[$otherId] = 'accepted';
+            } elseif ($f->status === FriendStatus::PENDING->value) {
+                $friendshipMap[$otherId] = ($f->user_id === $currentUserId) ? 'pending_sent' : 'pending_received';
+            } else {
+                $friendshipMap[$otherId] = $f->status instanceof FriendStatus ? $f->status->value : (string) $f->status;
+            }
+        }
+
+        $results = $users->map(function ($u) use ($friendshipMap, $friendshipIdMap) {
+            return [
+                'id' => $u->id,
+                'user_id' => $u->id,
+                'username' => $u->username,
+                'name' => $u->username,
+                'avatar_url' => $u->avatar_url,
+                'level' => $u->level ?? 1,
+                'is_guest' => (bool) $u->is_guest,
+                'friendship_status' => $friendshipMap[$u->id] ?? 'none',
+                'friend_request_id' => $friendshipIdMap[$u->id] ?? null,
+            ];
+        });
+
+        return response()->json([
+            'status' => 'success',
+            'data' => $results,
+        ]);
+    }
+
+    /**
      * POST /api/v1/friends/request
      * Headers: Authorization: Bearer <token>
      */
     public function sendRequest(SendFriendRequest $request): JsonResponse
     {
         $userId = $request->user()->id;
-        $friendId = (int) $request->friend_id;
+        $friendId = $request->friend_id ? (int) $request->friend_id : null;
+
+        if (!$friendId && $request->filled('username')) {
+            $targetUser = User::where('username', trim($request->username))->first();
+            if ($targetUser) {
+                $friendId = $targetUser->id;
+            }
+        }
+
+        if (!$friendId) {
+            return response()->json(['status' => 'error', 'message' => 'Target player not found'], 404);
+        }
 
         if ($userId === $friendId) {
             return response()->json(['status' => 'error', 'message' => 'You cannot add yourself as a friend'], 400);
@@ -98,6 +182,8 @@ class FriendController extends Controller
 
         $friendship->load(['user', 'friend']);
 
+        broadcast(new \App\Events\FriendRequestUpdated($userId, $friendId, 'pending', $friendship->id));
+
         return response()->json([
             'status' => 'success',
             'message' => 'Friend request sent successfully',
@@ -117,8 +203,12 @@ class FriendController extends Controller
             ->where('friend_id', $request->user()->id)
             ->firstOrFail();
 
+        $senderId = $friendship->user_id;
+        $receiverId = $friendship->friend_id;
+
         if ($request->status === 'declined') {
             $friendship->delete();
+            broadcast(new \App\Events\FriendRequestUpdated($senderId, $receiverId, 'declined', $id));
             return response()->json([
                 'status' => 'success',
                 'message' => 'Friend request declined',
@@ -127,6 +217,8 @@ class FriendController extends Controller
 
         $friendship->update(['status' => $request->status]);
         $friendship->load(['user', 'friend']);
+
+        broadcast(new \App\Events\FriendRequestUpdated($senderId, $receiverId, $request->status, $friendship->id));
 
         return response()->json([
             'status' => 'success',

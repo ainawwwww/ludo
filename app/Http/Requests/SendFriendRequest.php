@@ -14,7 +14,8 @@ class SendFriendRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'friend_id' => 'required|integer|exists:users,id|different:user_id',
+            'friend_id' => 'required_without:username|nullable|integer|exists:users,id',
+            'username' => 'required_without:friend_id|nullable|string|exists:users,username',
         ];
     }
 }

@@ -55,14 +55,38 @@ class MatchmakingService
         // Check if user is already in a queue
         $existingQueue = Cache::get($userQueueKey);
         if ($existingQueue) {
-            // Already queued - return current position
-            $queue = Cache::get($queueKey, []);
-            $position = $this->findUserPosition($queue, $user->id);
-            return [
-                'status' => 'waiting',
-                'queue_position' => $position !== false ? $position + 1 : 1,
-                'message' => 'Already in matchmaking queue',
-            ];
+            if ($existingQueue !== $queueKey) {
+                // User is switching queues (e.g. from 4-player to 2-player). Remove from old queue!
+                $oldLock = Cache::lock("matchmaking:lock:{$existingQueue}", 5);
+                try {
+                    $oldLock->block(2);
+                    $oldQ = Cache::get($existingQueue, []);
+                    $oldQ = array_values(array_filter($oldQ, function ($e) use ($user) {
+                        if (isset($e['user_id'])) return (int) $e['user_id'] !== (int) $user->id;
+                        if (isset($e['user_ids']) && is_array($e['user_ids'])) return !in_array((int) $user->id, $e['user_ids'], true);
+                        return true;
+                    }));
+                    Cache::put($existingQueue, $oldQ, 120);
+                } catch (\Throwable $e) {
+                    // Ignore lock timeout on old queue
+                } finally {
+                    optional($oldLock)->release();
+                    Cache::forget($userQueueKey);
+                }
+            } else {
+                // Same queue: verify user is ACTUALLY in this queue
+                $queue = Cache::get($queueKey, []);
+                $position = $this->findUserPosition($queue, $user->id);
+                if ($position !== false) {
+                    return [
+                        'status' => 'waiting',
+                        'queue_position' => $position + 1,
+                        'message' => 'Already in matchmaking queue',
+                    ];
+                }
+                // Stale ghost marker: clear and allow joining fresh
+                Cache::forget($userQueueKey);
+            }
         }
 
         // Use a lock to ensure atomic queue operations
@@ -173,6 +197,27 @@ class MatchmakingService
             return null;
         }
 
+        // Verify active state in Redis if game exists
+        if ($game) {
+            $state = app(\App\Services\GameEngine\RedisGameStateStore::class)->getState($room->id);
+            if ($state) {
+                if (($state['status'] ?? '') !== 'in_progress') {
+                    return null;
+                }
+                // Check if user is still an active player (not forfeited)
+                $userSeat = null;
+                foreach ($state['players'] ?? [] as $s => $p) {
+                    if ((int)$p['user_id'] === (int)$user->id) {
+                        $userSeat = (int)$s;
+                        break;
+                    }
+                }
+                if ($userSeat === null || !in_array($userSeat, $state['active_seats'] ?? [])) {
+                    return null;
+                }
+            }
+        }
+
         // Get all players in this room
         $players = [];
         $roomPlayers = RoomPlayer::with('user')->where('room_id', $room->id)->orderBy('seat_position')->get();
@@ -192,6 +237,9 @@ class MatchmakingService
             'quick_match_id' => $room->id,
             'room_id' => $room->id,
             'game_id' => $game ? $game->id : null,
+            'entry_fee' => (int) ($room->entry_fee ?? 200),
+            'max_players' => (int) ($room->max_players ?? 2),
+            'room_type' => $room->type instanceof RoomType ? $room->type->value : (string) $room->type,
             'players' => $players,
         ];
     }
@@ -230,15 +278,23 @@ class MatchmakingService
             $lock->block(5);
 
             $queue = Cache::get($queueKey, []);
-            $queue = array_values(array_filter($queue, fn($entry) => $entry['user_id'] !== $user->id));
-            Cache::put($queueKey, $queue, 86400);
-            Cache::forget($userQueueKey);
+            $queue = array_values(array_filter($queue, function ($entry) use ($user) {
+                if (isset($entry['user_id'])) {
+                    return (int) $entry['user_id'] !== (int) $user->id;
+                }
+                if (isset($entry['user_ids']) && is_array($entry['user_ids'])) {
+                    return !in_array((int) $user->id, $entry['user_ids'], true);
+                }
+                return true;
+            }));
+            Cache::put($queueKey, $queue, 120);
 
             return [
                 'status' => 'success',
                 'message' => 'Left matchmaking queue',
             ];
         } finally {
+            Cache::forget($userQueueKey);
             optional($lock)->release();
         }
     }
@@ -444,13 +500,18 @@ class MatchmakingService
 
         $existingQueue = Cache::get($userQueueKey);
         if ($existingQueue) {
-            $queue = Cache::get($queueKey, []);
-            $position = $this->findTeamEntryPosition($queue, $user->id);
-            return [
-                'status' => 'waiting',
-                'queue_position' => $position !== false ? $position + 1 : 1,
-                'message' => 'Already in matchmaking queue',
-            ];
+            if ($existingQueue === $queueKey) {
+                $queue = Cache::get($queueKey, []);
+                $position = $this->findTeamEntryPosition($queue, $user->id);
+                if ($position !== false) {
+                    return [
+                        'status' => 'waiting',
+                        'queue_position' => $position + 1,
+                        'message' => 'Already in matchmaking queue',
+                    ];
+                }
+            }
+            Cache::forget($userQueueKey);
         }
 
         $lock = Cache::lock("matchmaking:lock:{$queueKey}", 10);
@@ -794,7 +855,10 @@ class MatchmakingService
     private function findTeamEntryPosition(array $queue, int $userId): int|false
     {
         foreach ($queue as $idx => $entry) {
-            if (in_array($userId, $entry['user_ids'], true)) {
+            if (isset($entry['user_ids']) && is_array($entry['user_ids']) && in_array($userId, $entry['user_ids'], true)) {
+                return $idx;
+            }
+            if (isset($entry['user_id']) && (int) $entry['user_id'] === $userId) {
                 return $idx;
             }
         }
@@ -823,7 +887,10 @@ class MatchmakingService
     private function findUserPosition(array $queue, int $userId): int|false
     {
         foreach ($queue as $index => $entry) {
-            if ($entry['user_id'] === $userId) {
+            if (isset($entry['user_id']) && (int) $entry['user_id'] === $userId) {
+                return $index;
+            }
+            if (isset($entry['user_ids']) && is_array($entry['user_ids']) && in_array($userId, $entry['user_ids'], true)) {
                 return $index;
             }
         }

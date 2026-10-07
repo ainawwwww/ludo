@@ -33,6 +33,7 @@ class UpdateProfileRequest extends FormRequest
         return [
             'name' => 'nullable|string|max:50',
             'avatar' => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
+            'avatar_url' => 'nullable|string|max:255',
             'gender' => 'nullable|string|in:male,female,unspecified',
             'dob' => [
                 'nullable',

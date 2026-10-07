@@ -9,4 +9,6 @@ enum StoreItemType: string
     case TOKEN_SKIN = 'token_skin';
     case BOARD_THEME = 'board_theme';
     case AVATAR_FRAME = 'avatar_frame';
+    case BUBBLE = 'bubble';
+    case STICKERS = 'stickers';
 }
