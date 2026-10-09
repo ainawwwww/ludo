@@ -36,8 +36,14 @@ return [
     ],
 
     'google' => [
-        'client_id' => env('GOOGLE_CLIENT_ID'),
+        'client_id' => env('GOOGLE_CLIENT_ID', '741692358771-gr8b608j5l7ck4bufcare9stoerqvfav.apps.googleusercontent.com'),
         'client_secret' => env('GOOGLE_CLIENT_SECRET'),
     ],
 
+    'agora' => [
+        'app_id' => env('AGORA_APP_ID', ''),
+        'app_certificate' => env('AGORA_APP_CERTIFICATE', ''),
+    ],
+
 ];
+

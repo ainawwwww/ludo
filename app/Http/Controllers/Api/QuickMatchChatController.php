@@ -80,14 +80,14 @@ class QuickMatchChatController extends Controller
         
         try {
             $messages = Cache::remember($cacheKey, 2, function () use ($roomId) {
-                return ChatMessage::with(['user' => fn($q) => $q->select('id', 'username')])
+                return ChatMessage::with(['user' => fn($q) => $q->select('id', 'username', 'avatar_url')])
                     ->where('room_id', $roomId)
                     ->orderBy('id', 'asc')
                     ->limit(50)
                     ->get();
             });
         } catch (\Throwable $e) {
-            $messages = ChatMessage::with(['user' => fn($q) => $q->select('id', 'username')])
+            $messages = ChatMessage::with(['user' => fn($q) => $q->select('id', 'username', 'avatar_url')])
                 ->where('room_id', $roomId)
                 ->orderBy('id', 'asc')
                 ->limit(50)

@@ -1,0 +1,8 @@
+.git
+.github
+tests
+.phpunit.result.cache
+phpunit.xml
+Redis-x64-5.0.14.1.msi
+node_modules
+*.md

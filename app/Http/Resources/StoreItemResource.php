@@ -11,6 +11,7 @@ class StoreItemResource extends JsonResource
     {
         return [
             'id' => $this->id,
+            'item_key' => $this->item_key,
             'name' => $this->name,
             'type' => $this->type,
             'price' => $this->price,

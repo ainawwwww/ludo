@@ -52,6 +52,7 @@ class RedisGameStateStore
             'must_move' => false,
             'consecutive_sixes' => 0,
             'turn_seconds' => 15,
+            'missed_turns' => array_fill_keys($activeSeats, 0),
             'token_positions' => $tokenPositions,
             'players' => $playerSeats,
             'status' => 'in_progress',

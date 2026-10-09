@@ -129,16 +129,25 @@ class ProfileController extends Controller
             $data['name_change_reset_at'] = $user->name_change_reset_at;
         }
 
-        // Handle avatar upload
+        // Handle avatar upload (file or preset string url)
+        $timestamp = time();
         if ($request->hasFile('avatar')) {
             // Delete old avatar if stored locally
-            if ($user->avatar_url) {
-                $oldPath = str_replace('/storage/', '', $user->avatar_url);
+            if ($user->avatar_url && str_contains($user->avatar_url, '/storage/avatars/')) {
+                $rawOld = strtok($user->avatar_url, '?');
+                $oldPath = str_replace('/storage/', '', $rawOld);
                 Storage::disk('public')->delete($oldPath);
             }
 
             $path = $request->file('avatar')->store('avatars', 'public');
-            $data['avatar_url'] = '/storage/' . $path;
+            $data['avatar_url'] = '/storage/' . $path . '?v=' . $timestamp;
+        } elseif ($request->filled('avatar_url')) {
+            $inputAvatar = trim($request->input('avatar_url'));
+            if (str_starts_with($inputAvatar, 'assets/')) {
+                $data['avatar_url'] = strtok($inputAvatar, '?');
+            } else {
+                $data['avatar_url'] = strtok($inputAvatar, '?') . '?v=' . $timestamp;
+            }
         }
 
         // Handle simple profile fields
@@ -159,10 +168,24 @@ class ProfileController extends Controller
             $user->update($data);
         }
 
+        $freshUser = $user->fresh();
+
+        // Broadcast profile update event to user's accepted friends
+        $friendships = \App\Models\Friend::where(function ($q) use ($user) {
+            $q->where('user_id', $user->id)->orWhere('friend_id', $user->id);
+        })->where('status', \App\Enums\FriendStatus::ACCEPTED->value)->get();
+
+        $friendIds = [];
+        foreach ($friendships as $f) {
+            $friendIds[] = ($f->user_id === $user->id) ? $f->friend_id : $f->user_id;
+        }
+
+        broadcast(new \App\Events\UserProfileUpdated($freshUser, $friendIds));
+
         return response()->json([
             'status' => 'success',
             'message' => 'Profile updated successfully',
-            'data' => new ProfileResource($user->fresh()),
+            'data' => new ProfileResource($freshUser),
         ]);
     }
 }

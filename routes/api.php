@@ -58,7 +58,7 @@ Route::prefix('v1')->group(function () {
 
         // Profile Module
         Route::get('/profile', [ProfileController::class, 'show']);
-        Route::put('/profile', [ProfileController::class, 'update']);
+        Route::match(['put', 'post'], '/profile', [ProfileController::class, 'update']);
 
         // Wallet Module
         Route::get('/wallet/balance', [WalletController::class, 'getBalance']);
@@ -76,6 +76,7 @@ Route::prefix('v1')->group(function () {
         Route::post('/quick-match/roll', [GameController::class, 'rollDice']);
         Route::post('/quick-match/move', [GameController::class, 'moveToken']);
         Route::post('/quick-match/forfeit', [GameController::class, 'forfeitMatch']);
+        Route::post('/quick-match/timeout', [GameController::class, 'processTimeout']);
         Route::post('/quick-match/message', [QuickMatchChatController::class, 'sendMessage']);
         Route::get('/quick-match/messages', [QuickMatchChatController::class, 'getMessages']);
 
@@ -102,6 +103,7 @@ Route::prefix('v1')->group(function () {
         Route::post('/game/roll', [GameController::class, 'rollDice']);
         Route::post('/game/move', [GameController::class, 'moveToken']);
         Route::post('/game/forfeit', [GameController::class, 'forfeitMatch']);
+        Route::post('/game/timeout', [GameController::class, 'processTimeout']);
 
         // Leaderboard Ranking Module
         Route::get('/leaderboard', [LeaderboardController::class, 'index']);
@@ -118,6 +120,8 @@ Route::prefix('v1')->group(function () {
 
         // Friends Social Module
         Route::get('/friends', [FriendController::class, 'index']);
+        Route::get('/friends/search', [FriendController::class, 'search']);
+        Route::get('/users/search', [FriendController::class, 'search']);
         Route::get('/friends/requests', [FriendController::class, 'incomingRequests']);
         Route::post('/friends/request', [FriendController::class, 'sendRequest']);
         Route::post('/friends/{id}/respond', [FriendController::class, 'respondRequest']);
@@ -147,6 +151,8 @@ Route::prefix('v1')->group(function () {
         Route::post('/events/daily-tasks/{id}/claim', [EventController::class, 'claimDailyTask']);
         Route::get('/events/arrival-chest', [EventController::class, 'getArrivalChest']);
         Route::post('/events/arrival-chest/claim', [EventController::class, 'claimArrivalChest']);
+        // Voice Module (Agora RTC Token)
+        Route::post('/voice/token', [\App\Http\Controllers\Api\VoiceController::class, 'generateToken']);
 
         // Rooms Module
         Route::get('/rooms', [RoomController::class, 'index']);

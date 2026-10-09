@@ -27,6 +27,7 @@ use App\Models\Transaction;
 use App\Models\Wallet;
 
 use App\Services\GameEngine\DiceService;
+use App\Services\GameEngine\GameForfeitService;
 use App\Services\GameEngine\MoveValidator;
 use App\Services\GameEngine\RedisGameStateStore;
 use App\Services\GameEngine\TurnManager;
@@ -42,17 +43,20 @@ class GameController extends Controller
     private DiceService $diceService;
     private MoveValidator $moveValidator;
     private TurnManager $turnManager;
+    private GameForfeitService $forfeitService;
 
     public function __construct(
         RedisGameStateStore $stateStore,
         DiceService $diceService,
         MoveValidator $moveValidator,
-        TurnManager $turnManager
+        TurnManager $turnManager,
+        GameForfeitService $forfeitService
     ) {
         $this->stateStore = $stateStore;
         $this->diceService = $diceService;
         $this->moveValidator = $moveValidator;
         $this->turnManager = $turnManager;
+        $this->forfeitService = $forfeitService;
     }
 
     /**
@@ -206,6 +210,10 @@ class GameController extends Controller
 
                 $state['dice_value'] = $diceRoll;
                 $state['consecutive_sixes'] = $consecutiveSixes;
+                if (!isset($state['missed_turns']) || !is_array($state['missed_turns'])) {
+                    $state['missed_turns'] = [];
+                }
+                $state['missed_turns'][$seat] = 0;
                 $delay = isset($state['turn_seconds']) && $state['turn_seconds'] !== null
                     ? ((int) $state['turn_seconds'] + 2)
                     : 20;
@@ -340,6 +348,10 @@ class GameController extends Controller
                 }
 
                 $state['token_positions'][$playerColor][$tokenIndex] = $moveResult['new_steps'];
+                if (!isset($state['missed_turns']) || !is_array($state['missed_turns'])) {
+                    $state['missed_turns'] = [];
+                }
+                $state['missed_turns'][$seat] = 0;
 
                 if ($moveResult['is_kill']) {
                     foreach ($moveResult['killed_tokens'] as $killed) {
@@ -489,6 +501,7 @@ class GameController extends Controller
                 $state['dice_value'] = null;
                 $state['current_turn_seat'] = $nextSeat;
                 $state['current_turn_user_id'] = $state['players'][$nextSeat]['user_id'];
+                $state['last_action_at'] = now()->toIso8601String();
                 $delay = isset($state['turn_seconds']) && $state['turn_seconds'] !== null
                     ? ((int) $state['turn_seconds'] + 2)
                     : 20;
@@ -513,6 +526,139 @@ class GameController extends Controller
     }
 
     /**
+     * POST /api/v1/quick-match/timeout or POST /api/v1/game/timeout
+     * Headers: Authorization: Bearer <token>
+     */
+    public function processTimeout(Request $request): JsonResponse
+    {
+        $user = $request->user();
+        $roomId = (int) ($request->quick_match_id ?? $request->room_id);
+        if (!$roomId) {
+            return response()->json(['status' => 'error', 'message' => 'Room ID is required'], 400);
+        }
+
+        $lock = Cache::lock("ludo:lock:game:{$roomId}", 5);
+
+        try {
+            return $lock->block(3, function () use ($roomId, $user) {
+                $state = $this->stateStore->getState($roomId);
+                if (!$state || $state['status'] !== 'in_progress') {
+                    return response()->json(['status' => 'error', 'message' => 'No active game in progress'], 400);
+                }
+
+                $seat = $state['current_turn_seat'];
+                $turnUserId = (int) $state['current_turn_user_id'];
+                if ($turnUserId !== (int) $user->id) {
+                    return response()->json(['status' => 'error', 'message' => 'Not your turn to timeout'], 403);
+                }
+
+                $room = Room::find($roomId);
+                $isPrivate = $room ? $room->isPrivateOrVip() : false;
+                $delay = isset($state['turn_seconds']) && $state['turn_seconds'] !== null
+                    ? ((int) $state['turn_seconds'] + 2)
+                    : 15;
+
+                // 1. If player hasn't rolled yet -> pass turn
+                if ($state['can_roll']) {
+                    $missedTurns = (int) ($state['missed_turns'][$seat] ?? 0) + 1;
+                    if (!isset($state['missed_turns']) || !is_array($state['missed_turns'])) {
+                        $state['missed_turns'] = [];
+                    }
+                    $state['missed_turns'][$seat] = $missedTurns;
+
+                    if ($missedTurns >= 3) {
+                        $result = $this->forfeitService->forfeitSeat($roomId, $seat, 'timeout');
+                        return response()->json([
+                            'status' => 'success',
+                            'message' => 'Turn forfeited due to 3 missed turns.',
+                            'data' => $result,
+                        ]);
+                    }
+
+                    $nextSeat = $this->turnManager->getNextTurn($seat, $state['active_seats'], false);
+                    $state['can_roll'] = true;
+                    $state['must_move'] = false;
+                    $state['dice_value'] = null;
+                    $state['consecutive_sixes'] = 0;
+                    $state['current_turn_seat'] = $nextSeat;
+                    $state['current_turn_user_id'] = $state['players'][$nextSeat]['user_id'];
+                    $state['last_action_at'] = now()->toIso8601String();
+
+                    $this->stateStore->saveState($roomId, $state);
+
+                    broadcast(new TurnChanged($roomId, $nextSeat, $state['current_turn_user_id'], false, $isPrivate));
+
+                    ProcessTurnTimeout::dispatch($roomId, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds($delay));
+
+                    return response()->json([
+                        'status' => 'success',
+                        'message' => 'Turn passed due to timeout.',
+                        'data' => $state,
+                    ]);
+                }
+
+                // 2. Player rolled but timed out moving: auto-move first legal token
+                $playerColor = $state['players'][$seat]['color'];
+                $tokens = $state['token_positions'][$playerColor];
+                $diceRoll = $state['dice_value'];
+                $movableTokens = $this->moveValidator->getMovableTokens($tokens, $diceRoll);
+                $chosenToken = !empty($movableTokens) ? $movableTokens[0] : 0;
+
+                $roomType = $state['room_type'] ?? ($room ? ($room->type instanceof \App\Enums\RoomType ? $room->type->value : (string) $room->type) : 'public');
+                $moveResult = $this->moveValidator->validateMove($state['token_positions'], $playerColor, $chosenToken, $diceRoll, $roomType);
+
+                if ($moveResult['is_valid']) {
+                    $state['token_positions'][$playerColor][$chosenToken] = $moveResult['new_steps'];
+                    if ($moveResult['is_kill']) {
+                        foreach ($moveResult['killed_tokens'] as $killed) {
+                            $state['token_positions'][$killed['color']][$killed['token_index']] = -1;
+                        }
+                    }
+
+                    broadcast(new \App\Events\TokenMoved(
+                        $roomId,
+                        $seat,
+                        $user->id,
+                        $playerColor,
+                        $chosenToken,
+                        $moveResult['old_steps'],
+                        $moveResult['new_steps'],
+                        $moveResult['target_position'],
+                        $moveResult['is_kill'],
+                        $moveResult['killed_tokens'],
+                        $moveResult['reached_home'],
+                        $isPrivate
+                    ));
+                }
+
+                $grantExtra = $moveResult['is_valid'] && $this->turnManager->shouldGrantExtraTurn($diceRoll, $moveResult['is_kill'], $moveResult['reached_home'], $state['consecutive_sixes']);
+                $nextSeat = $this->turnManager->getNextTurn($seat, $state['active_seats'], $grantExtra);
+
+                $state['can_roll'] = true;
+                $state['must_move'] = false;
+                $state['dice_value'] = null;
+                $state['current_turn_seat'] = $nextSeat;
+                $state['current_turn_user_id'] = $state['players'][$nextSeat]['user_id'];
+                $state['last_action_at'] = now()->toIso8601String();
+
+                $this->stateStore->saveState($roomId, $state);
+
+                broadcast(new TurnChanged($roomId, $nextSeat, $state['current_turn_user_id'], $grantExtra, $isPrivate));
+
+                ProcessTurnTimeout::dispatch($roomId, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds($delay));
+
+                return response()->json([
+                    'status' => 'success',
+                    'message' => 'Auto-moved token due to timeout.',
+                    'data' => $state,
+                ]);
+            });
+        } catch (LockTimeoutException $e) {
+            return response()->json(['status' => 'error', 'message' => 'Action in progress, please retry'], 409);
+        }
+    }
+
+    /**
      * POST /api/v1/quick-match/forfeit or POST /api/v1/game/forfeit
      * Headers: Authorization: Bearer <token>
      */
@@ -525,234 +671,43 @@ class GameController extends Controller
             return response()->json(['status' => 'error', 'message' => 'Room ID is required'], 400);
         }
 
-        $state = $this->stateStore->getState($roomId);
-        if (!$state || $state['status'] !== 'in_progress') {
-            return response()->json(['status' => 'error', 'message' => 'No active in-progress match found'], 400);
-        }
+        $lock = Cache::lock("ludo:lock:game:{$roomId}", 5);
 
-        $room = Room::find($roomId);
-        $isPrivateRoom = $room ? $room->isPrivateOrVip() : false;
-
-        $entryFee = (int) ($room?->entry_fee ?? 200);
-        $maxPlayers = (int) ($room?->max_players ?? 2);
-        if ($isPrivateRoom) {
-            $rawPot = $entryFee > 0 ? ($entryFee * $maxPlayers) : 0;
-            $cutPct = (float) config('private_room.platform_cut_percentage', 0);
-            $platformCut = (int) floor($rawPot * ($cutPct / 100.0));
-            $totalPrize = max(0, $rawPot - $platformCut);
-        } else {
-            $totalPrize = max(400, $entryFee * $maxPlayers);
-        }
-
-        // Find leaver's seat
-        $leaverSeat = null;
-        foreach ($state['players'] as $seat => $player) {
-            if ((int)$player['user_id'] === (int)$user->id) {
-                $leaverSeat = (int)$seat;
-                break;
-            }
-        }
-
-        if ($leaverSeat === null) {
-            if ($isPrivateRoom) {
-                return response()->json(['status' => 'error', 'message' => 'Active match state not found'], 404);
-            }
-            return response()->json(['status' => 'error', 'message' => 'You are not a player in this match'], 403);
-        }
-
-        $roomTypeVal = $room ? ($room->type instanceof RoomType ? $room->type->value : (string) $room->type) : 'public';
-        $isTeamRoom = ($roomTypeVal === RoomType::TEAM->value || $roomTypeVal === 'team');
-
-        if ($isTeamRoom) {
-            // Team Mode Forfeit: Entire leaver team forfeits, opposing team wins and splits pot 50/50!
-            $leaverColor = strtolower($state['players'][$leaverSeat]['color']);
-            $leaverTeam = \App\Support\TeamAssignment::teamForColor($leaverColor);
-            $opposingTeam = ($leaverTeam === 1) ? 2 : 1;
-
-            $winningUserIds = [];
-            $winnerUsername = 'Opposing Team';
-            foreach ($state['players'] as $p) {
-                $pColor = strtolower($p['color']);
-                if (\App\Support\TeamAssignment::teamForColor($pColor) === $opposingTeam) {
-                    $winningUserIds[] = (int) $p['user_id'];
-                    $winnerUsername = $p['username'];
+        try {
+            return $lock->block(3, function () use ($roomId, $user) {
+                $state = $this->stateStore->getState($roomId);
+                if (!$state || $state['status'] !== 'in_progress') {
+                    return response()->json(['status' => 'error', 'message' => 'No active in-progress match found'], 400);
                 }
-            }
-            $winningUserIds = array_unique($winningUserIds);
-            $primaryWinnerId = reset($winningUserIds) ?: null;
 
-            $state['status'] = 'completed';
-            $state['winner_id'] = $primaryWinnerId;
-            $this->stateStore->saveState($roomId, $state);
+                $leaverSeat = null;
+                foreach ($state['players'] as $seat => $player) {
+                    if ((int)$player['user_id'] === (int)$user->id) {
+                        $leaverSeat = (int)$seat;
+                        break;
+                    }
+                }
 
-            $game = Game::find($state['game_id']);
-            if ($game) {
-                $game->update([
-                    'winner_id' => $primaryWinnerId,
-                    'status' => GameStatus::COMPLETED->value,
-                    'ended_at' => now(),
+                if ($leaverSeat === null) {
+                    return response()->json(['status' => 'error', 'message' => 'You are not a player in this match'], 403);
+                }
+
+                $result = $this->forfeitService->forfeitSeat($roomId, $leaverSeat, 'manual');
+
+                return response()->json([
+                    'status' => 'success',
+                    'message' => $result['is_game_over'] ? 'You forfeited the match. Remaining player awarded victory.' : 'You left the match.',
+                    'data' => [
+                        'is_game_over' => $result['is_game_over'],
+                        'winner_id' => $result['winner_id'] ?? null,
+                        'winner_username' => $result['winner_username'] ?? null,
+                        'prize_coins' => $result['prize_coins'] ?? 400,
+                        'game_state' => $result['game_state'] ?? null,
+                    ],
                 ]);
-            }
-
-            if ($room) {
-                $room->update(['status' => RoomStatus::FINISHED->value]);
-                $room->increment('state_version');
-            }
-
-            $entryFee = (int) ($room->entry_fee ?? 100);
-            $rawPot = $entryFee * 4;
-            $cutPct = (float) config('private_room.platform_cut_percentage', 0);
-            $platformCut = (int) floor($rawPot * ($cutPct / 100.0));
-            $totalPrize = max(0, $rawPot - $platformCut);
-            $sharePerTeammate = (int) floor($totalPrize / 2);
-
-            if ($sharePerTeammate > 0) {
-                foreach ($winningUserIds as $winnerUserId) {
-                    Wallet::where('user_id', $winnerUserId)->increment('coins_balance', $sharePerTeammate);
-
-                    Transaction::create([
-                        'user_id' => $winnerUserId,
-                        'type' => TransactionType::WIN,
-                        'currency_type' => 'coins',
-                        'amount' => $sharePerTeammate,
-                        'reference_id' => (string) $roomId,
-                        'created_at' => now(),
-                    ]);
-                }
-            }
-
-            broadcast(new GameEnded($roomId, $state['game_id'], $primaryWinnerId ?? 0, $winnerUsername, $totalPrize, true));
-            broadcast(new PlayerForfeited($roomId, $user->id, $user->username, true, $primaryWinnerId, $winnerUsername, $totalPrize, true));
-
-            return response()->json([
-                'status' => 'success',
-                'message' => 'Team forfeited the match. Opposing team awarded victory.',
-                'data' => [
-                    'is_game_over' => true,
-                    'winner_id' => $primaryWinnerId,
-                    'winner_username' => $winnerUsername,
-                    'prize_coins' => $totalPrize,
-                    'game_state' => $state,
-                ],
-            ]);
+            });
+        } catch (LockTimeoutException $e) {
+            return response()->json(['status' => 'error', 'message' => 'Action in progress, please retry'], 409);
         }
-
-        // Remove leaver from active seats
-        $activeSeats = array_values(array_diff($state['active_seats'], [$leaverSeat]));
-        $state['active_seats'] = $activeSeats;
-        if (isset($state['players'][$leaverSeat])) {
-            $state['players'][$leaverSeat]['is_connected'] = false;
-        }
-
-        // Check if only 1 (or 0) active player remains -> GAME OVER, Remaining Player WINS Full Pot!
-        if (count($activeSeats) <= 1) {
-            $winnerSeat = !empty($activeSeats) ? $activeSeats[0] : null;
-            $winnerPlayer = $winnerSeat !== null ? ($state['players'][$winnerSeat] ?? null) : null;
-            $winnerId = $winnerPlayer['user_id'] ?? null;
-            $winnerUsername = $winnerPlayer['username'] ?? 'Winner';
-
-            $state['status'] = 'completed';
-            $state['winner_id'] = $winnerId;
-            $this->stateStore->saveState($roomId, $state);
-
-            // Update Game in DB
-            $game = Game::find($state['game_id']);
-            if ($game) {
-                $game->update([
-                    'winner_id' => $winnerId,
-                    'status' => GameStatus::COMPLETED->value,
-                    'ended_at' => now(),
-                ]);
-
-                if ($winnerId) {
-                    app(\App\Services\LeagueService::class)->awardLeaguePoints($game);
-                    app(\App\Services\TournamentService::class)->processMatchResult($roomId, $winnerId);
-                }
-            }
-
-            // Award full pot coins to the winning player's wallet
-            if ($winnerId) {
-                if ($isPrivateRoom) {
-                    if ($totalPrize > 0) {
-                        Wallet::where('user_id', $winnerId)->increment('coins_balance', $totalPrize);
-
-                        Transaction::create([
-                            'user_id' => $winnerId,
-                            'type' => TransactionType::WIN,
-                            'currency_type' => 'coins',
-                            'amount' => $totalPrize,
-                            'reference_id' => (string) $roomId,
-                            'created_at' => now(),
-                        ]);
-                    }
-
-                    if ($room) {
-                        $room->update(['status' => RoomStatus::FINISHED->value]);
-                        $room->increment('state_version');
-                    }
-                } else {
-                    Wallet::where('user_id', $winnerId)->increment('coins_balance', $totalPrize);
-
-                    Transaction::create([
-                        'user_id' => $winnerId,
-                        'type' => TransactionType::REWARD,
-                        'currency_type' => 'coins',
-                        'amount' => $totalPrize,
-                        'reference_id' => (string) $roomId,
-                        'created_at' => now(),
-                    ]);
-
-                    if ($room) {
-                        $room->update(['status' => RoomStatus::FINISHED->value]);
-                    }
-                }
-            }
-
-            // Broadcast real-time events
-            broadcast(new GameEnded($roomId, $state['game_id'], $winnerId ?? 0, $winnerUsername, $totalPrize, $isPrivateRoom));
-            broadcast(new PlayerForfeited($roomId, $user->id, $user->username, true, $winnerId, $winnerUsername, $totalPrize, $isPrivateRoom));
-
-            return response()->json([
-                'status' => 'success',
-                'message' => 'You forfeited the match. Remaining player awarded victory.',
-                'data' => [
-                    'is_game_over' => true,
-                    'winner_id' => $winnerId,
-                    'winner_username' => $winnerUsername,
-                    'prize_coins' => $totalPrize,
-                    'game_state' => $state,
-                ],
-            ]);
-        }
-
-        // More than 1 active player remains (4-player match continues with remaining players)
-        // If it was the leaver's turn, pass turn to the next active player
-        if ($state['current_turn_seat'] === $leaverSeat) {
-            $nextSeat = $this->turnManager->getNextTurn($leaverSeat, $state['active_seats'], false);
-            $state['current_turn_seat'] = $nextSeat;
-            $state['current_turn_user_id'] = $state['players'][$nextSeat]['user_id'];
-            $state['can_roll'] = true;
-            $state['must_move'] = false;
-            $state['dice_value'] = null;
-
-            broadcast(new TurnChanged($roomId, $nextSeat, $state['current_turn_user_id'], false, $isPrivateRoom));
-            $delay = isset($state['turn_seconds']) && $state['turn_seconds'] !== null
-                ? ((int) $state['turn_seconds'] + 2)
-                : 20;
-            ProcessTurnTimeout::dispatch($roomId, $nextSeat, $state['last_action_at'])->delay(now()->addSeconds($delay));
-        }
-
-        $this->stateStore->saveState($roomId, $state);
-
-        broadcast(new PlayerForfeited($roomId, $user->id, $user->username, false, null, null, 400, $isPrivateRoom));
-
-        return response()->json([
-            'status' => 'success',
-            'message' => 'You left the match. Match continues for remaining players.',
-            'data' => [
-                'is_game_over' => false,
-                'game_state' => $state,
-            ],
-        ]);
     }
 }

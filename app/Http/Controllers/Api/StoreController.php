@@ -56,15 +56,23 @@ class StoreController extends Controller
     public function purchase(PurchaseItemRequest $request): JsonResponse
     {
         $user = $request->user();
-        $item = StoreItem::findOrFail($request->item_id);
+        $rawId = $request->item_id;
+        $item = is_numeric($rawId)
+            ? StoreItem::find((int) $rawId)
+            : StoreItem::where('item_key', (string) $rawId)->first();
+
+        if (!$item) {
+            return response()->json(['status' => 'error', 'message' => 'Item not found'], 404);
+        }
 
         if ($user->inventory()->where('item_id', $item->id)->exists()) {
             return response()->json(['status' => 'error', 'message' => 'Item already owned'], 400);
         }
 
         $wallet = $user->wallet ?? $user->wallet()->create();
+        $currency = is_string($item->currency_type) ? $item->currency_type : ($item->currency_type?->value ?? 'coins');
 
-        if ($item->currency_type->value === 'coins') {
+        if ($currency === 'coins') {
             if ($wallet->coins_balance < $item->price) {
                 return response()->json(['status' => 'error', 'message' => 'Insufficient coins balance'], 400);
             }
@@ -86,16 +94,24 @@ class StoreController extends Controller
         Transaction::create([
             'user_id' => $user->id,
             'type' => TransactionType::PURCHASE,
-            'currency_type' => $item->currency_type->value,
+            'currency_type' => $currency,
             'amount' => $item->price,
             'reference_id' => 'ITEM_' . $item->id,
             'created_at' => now(),
         ]);
 
+        $freshWallet = $wallet->fresh();
+
         return response()->json([
             'status' => 'success',
             'message' => 'Item purchased successfully',
-            'data' => new StoreItemResource($item),
+            'data' => [
+                'item' => new StoreItemResource($item),
+                'wallet' => [
+                    'coins' => (int) ($freshWallet->coins_balance ?? 0),
+                    'diamonds' => (int) ($freshWallet->diamonds_balance ?? 0),
+                ],
+            ],
         ]);
     }
 
@@ -119,17 +135,24 @@ class StoreController extends Controller
      * 
      * Request Payload (JSON):
      * {
-     *   "item_id": 1
+     *   "item_id": 1  // or "dice_chick"
      * }
      */
     public function equip(Request $request): JsonResponse
     {
         $request->validate([
-            'item_id' => 'required|integer|exists:store_items,id',
+            'item_id' => 'required',
         ]);
 
         $user = $request->user();
-        $targetItem = StoreItem::findOrFail($request->item_id);
+        $rawId = $request->item_id;
+        $targetItem = is_numeric($rawId)
+            ? StoreItem::find((int) $rawId)
+            : StoreItem::where('item_key', (string) $rawId)->first();
+
+        if (!$targetItem) {
+            return response()->json(['status' => 'error', 'message' => 'Item not found'], 404);
+        }
 
         $inventoryRecord = UserInventory::where('user_id', $user->id)
             ->where('item_id', $targetItem->id)
@@ -163,9 +186,10 @@ class StoreController extends Controller
         // Sync to user metadata for real-time room / match broadcasts
         $metadata = $user->metadata ?? [];
         $equipped = $metadata['equipped'] ?? [];
-        $typeKey = is_string($targetItem->type) ? $targetItem->type : $targetItem->type->value;
+        $typeKey = is_string($targetItem->type) ? $targetItem->type : ($targetItem->type?->value ?? 'item');
         $equipped[$typeKey] = [
             'id' => $targetItem->id,
+            'item_key' => $targetItem->item_key,
             'name' => $targetItem->name,
             'image_url' => $targetItem->image_url,
         ];

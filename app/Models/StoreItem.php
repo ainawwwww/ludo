@@ -15,6 +15,7 @@ class StoreItem extends Model
 
     protected $fillable = [
         'name',
+        'item_key',
         'type',
         'price',
         'currency_type',

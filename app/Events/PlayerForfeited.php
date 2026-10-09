@@ -21,7 +21,8 @@ class PlayerForfeited implements ShouldBroadcastNow
         public ?int $winnerId = null,
         public ?string $winnerUsername = null,
         public int $prizeCoins = 400,
-        public bool $isPrivate = false
+        public bool $isPrivate = false,
+        public string $reason = 'manual'
     ) {}
 
     public function broadcastOn(): array
@@ -53,6 +54,7 @@ class PlayerForfeited implements ShouldBroadcastNow
             'winner_id' => $this->winnerId,
             'winner_username' => $this->winnerUsername,
             'prize_coins' => $this->prizeCoins,
+            'reason' => $this->reason,
             'timestamp' => now()->toIso8601String(),
         ];
     }
