@@ -12,6 +12,7 @@ use App\Http\Controllers\Api\LeagueController;
 use App\Http\Controllers\Api\LeaderboardController;
 use App\Http\Controllers\Api\LobbyController;
 use App\Http\Controllers\Api\MatchmakingController;
+use App\Http\Controllers\Api\MusicController;
 use App\Http\Controllers\Api\PrivateRoomController;
 use App\Http\Controllers\Api\SubscriptionController;
 use App\Http\Controllers\Api\VipRoomController;
@@ -46,6 +47,9 @@ Route::prefix('v1')->group(function () {
 
     // Countries Public Endpoint (needed on registration screen)
     Route::get('/countries', [CountryController::class, 'index']);
+
+    // Music Search (Publicly browsable for lobby rooms)
+    Route::get('/music/search', [MusicController::class, 'search']);
 
     // Protected API Endpoints (Sanctum Guard)
     Route::middleware('auth:sanctum')->group(function () {
@@ -140,6 +144,10 @@ Route::prefix('v1')->group(function () {
         // Room Live Chat Module
         Route::post('/chat/message', [ChatController::class, 'sendMessage']);
         Route::get('/chat/messages', [ChatController::class, 'getMessages']);
+
+        // Music Disc Module
+        Route::get('/music/search', [MusicController::class, 'search']);
+        Route::post('/rooms/{room}/music', [MusicController::class, 'syncRoomMusic']);
 
         // Lobby Data Module (Phase 1)
         Route::get('/lobby/explore', [LobbyController::class, 'explore']);

@@ -45,5 +45,9 @@ return [
         'app_certificate' => env('AGORA_APP_CERTIFICATE', ''),
     ],
 
+    'jamendo' => [
+        'client_id' => env('JAMENDO_CLIENT_ID'),
+    ],
+
 ];
 
